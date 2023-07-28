@@ -1,0 +1,10 @@
+[package]
+name = "idol_api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rmp = "0.8.12"
+rmp-serde = "1.1.2"
+serde = { version = "1.0.177", features = ["derive"] }
+glam = "0.24.1"

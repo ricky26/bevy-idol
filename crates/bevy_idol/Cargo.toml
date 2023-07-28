@@ -1,0 +1,16 @@
+[package]
+name = "bevy_idol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.11.0"
+bevy_vrm = { path = "../bevy_vrm" }
+idol_api = { path = "../idol_api" }
+v4l = "0.14.0"
+clap = { version = "4.3.19", features = ["derive"] }
+anyhow = "1.0.72"
+tracing-subscriber = "0.3.17"
+log = "0.4.19"
+parking_lot = "0.12.1"
+tokio = { version = "1.29.1", features = ["rt-multi-thread"] }
