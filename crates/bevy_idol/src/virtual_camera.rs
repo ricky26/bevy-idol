@@ -1,9 +1,9 @@
+use std::ops::Add;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use bevy::prelude::Resource;
+use bevy::prelude::{Res, ResMut, Resource};
 use bevy::render::render_resource::{Buffer, BufferDescriptor, BufferUsages, MapMode};
 use bevy::render::renderer::RenderDevice;
 use parking_lot::{Condvar, Mutex};
@@ -17,7 +17,6 @@ use crate::output::OutputTexture;
 
 #[derive(Default)]
 struct CameraState {
-    quit: AtomicBool,
     lock: Mutex<()>,
     cond: Condvar,
 }
@@ -28,7 +27,7 @@ pub struct VirtualCamera {
     interval: Duration,
     deadline: Instant,
     state: Arc<CameraState>,
-    quit_rx: oneshot::Receiver<()>,
+    _quit_rx: oneshot::Receiver<()>,
 }
 
 impl VirtualCamera {
@@ -50,13 +49,13 @@ impl VirtualCamera {
             let buffer_slice = buffer.slice(..);
             buffer_slice.map_async(MapMode::Read, move |_| tx.send(()).expect("tx should succeed"));
             rx.recv().unwrap();
-
-            let in_buffer = &*buffer_slice.get_mapped_range();
-            out_buffer.copy_from_slice(in_buffer);
-            buffer.unmap();
-
             metadata.field = 0;
-            metadata.bytesused = in_buffer.len() as u32;
+            metadata.bytesused = {
+                let in_buffer = &*buffer_slice.get_mapped_range();
+                out_buffer.copy_from_slice(in_buffer);
+                in_buffer.len() as u32
+            };
+            buffer.unmap();
         }
 
         Ok(())
@@ -73,9 +72,9 @@ impl VirtualCamera {
         for format in device.enum_formats()? {
             log::info!("supported format {:?} {}", &format, &format.fourcc);
         }
-        let format = device.set_format(&Format::new(output.width, output.height, fourcc))?;
-        if format.fourcc != fourcc || format.width != output.width || format.height != output.height {
-            return Err(anyhow!("Camera doesn't support {}x{} {}", output.width, output.height, fourcc));
+        let format = device.set_format(&Format::new(output.width(), output.height(), fourcc))?;
+        if format.fourcc != fourcc || format.width != output.width() || format.height != output.height() {
+            return Err(anyhow!("Camera doesn't support {}x{} {}", output.width(), output.height(), fourcc));
         }
 
         let mut params = device.params()?;
@@ -91,7 +90,7 @@ impl VirtualCamera {
         let state = Arc::new(CameraState::default());
         let state_clone = state.clone();
 
-        let output_buffer_size = 4 * output.width * output.height;
+        let output_buffer_size = 4 * output.width() * output.height();
         let output_buffer = render_device.create_buffer(&BufferDescriptor {
             label: None,
             size: output_buffer_size as u64,
@@ -112,12 +111,30 @@ impl VirtualCamera {
             interval,
             deadline: Instant::now(),
             state,
-            quit_rx,
+            _quit_rx: quit_rx,
         })
     }
 }
 
-pub fn update_virtual_cameras() {
+pub fn update_virtual_cameras(
+    mut cam: ResMut<VirtualCamera>,
+    _output: Res<OutputTexture>,
+) {
+    let now = Instant::now();
+    if now < cam.deadline {
+        return;
+    }
 
+    // TODO: copy output texture to buffer?
+    let _buffer = &cam.output_buffer;
+
+    // Post updated frame
+    {
+        let _ = cam.state.lock.lock();
+        cam.state.cond.notify_one();
+    }
+
+    // Update deadline allowing frame skipping with low FPS
+    cam.deadline = cam.deadline.add(cam.interval).max(now);
 }
 

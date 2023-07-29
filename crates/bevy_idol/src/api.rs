@@ -6,7 +6,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{post, put};
 use bevy::prelude::{Assets, Image, Query, Res, ResMut, Resource};
 use bevy::render::render_resource::Extent3d;
-use bevy::render::renderer::{RenderDevice, RenderInstance};
 use bytes::Bytes;
 use headers::ContentLength;
 use tokio::sync::{mpsc, oneshot};
@@ -100,8 +99,6 @@ pub fn update_api(
     mut faces: Query<&mut Faces>,
     mut cameras: Query<&WebcamTexture>,
     output_texture: Res<OutputTexture>,
-    render_instance: Res<RenderInstance>,
-    render_device: Res<RenderDevice>,
     mut images: ResMut<Assets<Image>>,
 ) {
     while let Ok(command) = api.rx.try_recv() {
@@ -125,7 +122,7 @@ pub fn update_api(
                 }
             }
             Command::RequestTexture(request) => {
-                if let Some(response) = output_texture.export(&render_instance, &render_device) {
+                if let Some(response) = output_texture.export() {
                     request.send(response).ok();
                 }
             }

@@ -1,3 +1,4 @@
+use ash::extensions::khr::ExternalMemoryFd;
 use ash::vk;
 use ash::vk::{ExternalMemoryHandleTypeFlags, StructureType};
 use bevy::prelude::Resource;
@@ -15,13 +16,36 @@ pub struct VkTextureHack {
 
 #[derive(Resource)]
 pub struct OutputTexture {
-    pub width: u32,
-    pub height: u32,
-    pub output_texture: Texture,
+    width: u32,
+    height: u32,
+    output_texture: Texture,
+    external_memory_fd: ExternalMemoryFd,
 }
 
 impl OutputTexture {
-    pub fn new(device: &RenderDevice, width: u32, height: u32) -> Self {
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    pub fn texture(&self) -> &Texture {
+        &self.output_texture
+    }
+
+    pub fn new(instance: &RenderInstance, device: &RenderDevice, width: u32, height: u32) -> Self {
+        let external_memory_fd = unsafe {
+            let instance = instance.as_hal::<wgpu_hal::vulkan::Api>()
+                .expect("requires Vulkan instance")
+                .shared_instance()
+                .raw_instance();
+            device.wgpu_device().as_hal::<wgpu_hal::api::Vulkan, _, _>(|device|
+                device.map(|d| ExternalMemoryFd::new(instance, d.raw_device())))
+                .unwrap()
+        };
+
         let output_size = Extent3d {
             width,
             height,
@@ -42,45 +66,35 @@ impl OutputTexture {
             width,
             height,
             output_texture,
+            external_memory_fd,
         }
     }
 
-    pub fn export(&self, instance: &RenderInstance, device: &RenderDevice) -> Option<TextureResponse> {
+    pub fn export(&self) -> Option<TextureResponse> {
         let mut response = None;
 
         unsafe {
-            if let Some(instance) = instance.as_hal::<wgpu_hal::vulkan::Api>() {
-                let instance = instance.shared_instance().raw_instance();
-                device.wgpu_device().as_hal::<wgpu_hal::api::Vulkan, _, _>(|h| {
-                    let Some(device) = h else {
-                        return;
-                    };
-                    let device = device.raw_device();
-                    let factory = ash::extensions::khr::ExternalMemoryFd::new(instance, device);
+            self.output_texture.as_hal::<wgpu_hal::api::Vulkan, _>(|h| {
+                let Some(texture) = h else {
+                    return;
+                };
 
-                    self.output_texture.as_hal::<wgpu_hal::api::Vulkan, _>(|h| {
-                        let Some(texture) = h else {
-                            return;
-                        };
-
-                        let texture_hack: &VkTextureHack = std::mem::transmute(texture);
-                        if let Some(block) = texture_hack.block.as_ref() {
-                            if let Ok(fd) = factory.get_memory_fd(&vk::MemoryGetFdInfoKHR{
-                                s_type: StructureType::MEMORY_GET_FD_INFO_KHR,
-                                p_next: std::ptr::null(),
-                                memory: *block.memory(),
-                                handle_type: ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
-                            }) {
-                                response = Some(TextureResponse {
-                                    fd,
-                                    width: self.width,
-                                    height: self.height,
-                                });
-                            }
-                        }
-                    });
-                });
-            }
+                let texture_hack: &VkTextureHack = std::mem::transmute(texture);
+                if let Some(block) = texture_hack.block.as_ref() {
+                    if let Ok(fd) = self.external_memory_fd.get_memory_fd(&vk::MemoryGetFdInfoKHR {
+                        s_type: StructureType::MEMORY_GET_FD_INFO_KHR,
+                        p_next: std::ptr::null(),
+                        memory: *block.memory(),
+                        handle_type: ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
+                    }) {
+                        response = Some(TextureResponse {
+                            fd,
+                            width: self.width,
+                            height: self.height,
+                        });
+                    }
+                }
+            });
         }
 
         response
