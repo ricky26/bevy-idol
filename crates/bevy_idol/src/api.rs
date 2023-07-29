@@ -3,23 +3,21 @@ use std::sync::Arc;
 use axum::{Json, Router};
 use axum::extract::{State, TypedHeader};
 use axum::http::{HeaderMap, StatusCode};
-use axum::routing::{post, put};
-use bevy::prelude::{Assets, Image, Query, Res, ResMut, Resource};
+use axum::routing::put;
+use bevy::prelude::{Assets, Image, Query, ResMut, Resource};
 use bevy::render::render_resource::Extent3d;
-use bevy::render::renderer::RenderDevice;
 use bytes::Bytes;
 use headers::ContentLength;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
-use idol_api::{ApiError, SetCameraRequest, SetFacesRequest, TextureResponse};
-use crate::webcam::WebcamTexture;
-use crate::output::OutputTexture;
+use idol_api::{ApiError, SetCameraRequest, SetFacesRequest};
+
 use crate::tracking::Faces;
+use crate::webcam::WebcamTexture;
 
 pub enum Command {
     SetFaces(SetFacesRequest),
     SetCamera(SetCameraRequest),
-    RequestTexture(oneshot::Sender<TextureResponse>),
 }
 
 pub struct ApiState {
@@ -72,22 +70,10 @@ async fn put_faces(State(state): State<Arc<ApiState>>, Json(faces): Json<SetFace
     state.tx.send(Command::SetFaces(faces)).ok();
 }
 
-async fn share_texture(
-    State(state): State<Arc<ApiState>>,
-) -> Result<Json<TextureResponse>, ApiError> {
-    let (tx, rx) = oneshot::channel();
-    state.tx.send(Command::RequestTexture(tx)).ok();
-
-    rx.await
-        .map(Json)
-        .map_err(|_| ApiError::unavailable())
-}
-
 pub fn new_api() -> Router<Arc<ApiState>> {
     Router::new()
         .route("/v1/camera", put(put_camera))
         .route("/v1/faces", put(put_faces))
-        .route("/v1/share-texture", post(share_texture))
 }
 
 #[derive(Resource)]
@@ -99,9 +85,7 @@ pub fn update_api(
     mut api: ResMut<ApiResource>,
     mut faces: Query<&mut Faces>,
     mut cameras: Query<&WebcamTexture>,
-    output_texture: Res<OutputTexture>,
     mut images: ResMut<Assets<Image>>,
-    device: Res<RenderDevice>,
 ) {
     while let Ok(command) = api.rx.try_recv() {
         match command {
@@ -121,11 +105,6 @@ pub fn update_api(
                         });
                         image.data.copy_from_slice(&request.payload);
                     }
-                }
-            }
-            Command::RequestTexture(request) => {
-                if let Some(response) = output_texture.export(&device) {
-                    request.send(response).ok();
                 }
             }
         }

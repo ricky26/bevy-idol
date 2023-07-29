@@ -1,9 +1,6 @@
 use bevy::prelude::Resource;
 use bevy::render::render_resource::{Extent3d, Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::renderer::RenderDevice;
-use wgpu_hal::vulkan::{AsExternalMemoryRequest};
-
-use idol_api::TextureResponse;
 
 #[derive(Resource)]
 pub struct OutputTexture {
@@ -47,36 +44,5 @@ impl OutputTexture {
             height,
             output_texture,
         }
-    }
-
-    pub fn export(&self, device: &RenderDevice) -> Option<TextureResponse> {
-        let mut result = None;
-        unsafe {
-            let mut request = None;
-
-            self.output_texture.as_hal::<wgpu_hal::api::Vulkan, _>(|h| {
-                if let Some(texture) = h {
-                    request = texture.as_external_memory_request()
-                }
-            });
-
-            if let Some(request) = request {
-                device.wgpu_device().as_hal::<wgpu_hal::api::Vulkan, _, _>(|h| {
-                    let device = match h {
-                        Some(x) => x,
-                        None => return,
-                    };
-
-                    if let Some(mem) = device.create_external_memory_fd(request).unwrap() {
-                        result = Some(TextureResponse {
-                            fd: mem.fd,
-                            width: self.width,
-                            height: self.height,
-                        });
-                    }
-                })
-            }
-        }
-        result
     }
 }

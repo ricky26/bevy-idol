@@ -104,10 +104,3 @@ pub struct SetCameraRequest {
     pub height: u32,
     pub payload: Bytes,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TextureResponse {
-    pub fd: i32,
-    pub width: u32,
-    pub height: u32,
-}
