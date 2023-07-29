@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::render::camera::{ManualTextureView, ManualTextureViewHandle, ManualTextureViews, RenderTarget};
 use bevy::render::render_resource::{TextureFormat, TextureViewDescriptor};
 use bevy::render::RenderApp;
-use bevy::render::renderer::{RenderDevice, RenderInstance};
+use bevy::render::renderer::{RenderDevice};
 use bevy::render::view::RenderLayers;
 use clap::Parser;
 use wgpu::TextureViewDimension;
@@ -68,12 +68,11 @@ fn main() -> anyhow::Result<()> {
 
     // Create output
     let render_app = app.sub_app_mut(RenderApp);
-    let render_instance = render_app.world.resource::<RenderInstance>();
     let render_device = render_app.world.resource::<RenderDevice>();
     let output_width = options.output_width;
     let output_height = options.output_height;
     let output_texture = OutputTexture::new(
-        &render_instance, &render_device, output_width, output_height);
+        &render_device, output_width, output_height);
     if let Some(virtual_camera_index) = options.virtual_camera_index {
         let virtual_camera = VirtualCamera::new(&output_texture, &render_device, virtual_camera_index, options.output_fps)?;
         app.insert_resource(virtual_camera);

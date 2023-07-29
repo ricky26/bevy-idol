@@ -17,7 +17,6 @@ tokio = { version = "1.29.1", features = ["rt-multi-thread"] }
 axum = { version = "0.6.19", features = ["headers"] }
 bytes = "1.4.0"
 headers = "0.3.8"
-wgpu = "0.16.3"
-wgpu-hal = "0.16.2"
+wgpu = "^0.16.0"
+wgpu-hal = "^0.16.0"
 ash = "0.37.3"
-gpu-alloc = "0.6.0"
