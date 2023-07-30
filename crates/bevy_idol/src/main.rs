@@ -50,13 +50,14 @@ fn main() -> anyhow::Result<()> {
             bevy_vrm::VrmPlugin,
         ))
         .init_asset_loader::<debug_mesh::DebugMeshLoader>()
+        .init_resource::<Faces>()
         .add_systems(Update, (
             api::update_api,
             update_face_mesh,
             update_face_transforms,
             update_free_look,
             toggle_visibility,
-            save_face_mesh,
+            update_debug_text,
         ))
         .add_systems(Startup, init);
     let options = Options::parse();
@@ -99,6 +100,9 @@ struct FreeLook {
 #[derive(Component)]
 struct ToggleVisibilityKey(KeyCode);
 
+#[derive(Component)]
+struct DebugText;
+
 fn init(
     assets: Res<AssetServer>,
     mut commands: Commands,
@@ -127,12 +131,10 @@ fn init(
         },
     ));
 
-    // TODO: this should probably be relative to the assets directory.
-    // let face_mesh = meshes.add(tracking::load_debug_mesh("crates/bevy_idol/assets/meshes/canonical_face_model.obj").expect("failed to load debug mesh"));
+    // Debug Face
     commands.spawn((
         PbrBundle {
             mesh: assets.load("meshes/canonical_face_model.dobj"),
-            // mesh: face_mesh,
             material: materials.add(StandardMaterial {
                 double_sided: true,
                 cull_mode: None,
@@ -143,7 +145,6 @@ fn init(
             visibility: Visibility::Hidden,
             ..default()
         },
-        Faces::default(),
         NeedToCopyMesh,
         FaceMesh,
         RenderLayers::layer(1),
@@ -175,6 +176,9 @@ fn init(
             },
             ..default()
         },
+        UiCameraConfig {
+            show_ui: false,
+        },
         RenderLayers::from_layers(&[0, 2]),
         OutputCamera,
     ));
@@ -192,7 +196,6 @@ fn init(
             }),
             ..default()
         },
-        Faces::default(),
         FaceTransform,
     ));
 
@@ -206,33 +209,54 @@ fn init(
         unlit: true,
         ..default()
     });
+    commands.insert_resource(WebcamTexture {
+        image: camera_image,
+        material: camera_material.clone(),
+    });
     commands.spawn((
         PbrBundle {
             mesh: meshes.add(Mesh::from(shape::Plane {
                 size: 5.,
                 subdivisions: 1,
             })),
-            material: camera_material.clone(),
+            material: camera_material,
             transform: Transform::from_xyz(0., 1., 0.)
                 .with_rotation(Quat::from_rotation_x(std::f32::consts::PI * -0.5)),
             visibility: Visibility::Hidden,
             ..default()
         },
-        WebcamTexture {
-            image: camera_image,
-            material: camera_material,
-        },
         RenderLayers::layer(1),
         ToggleVisibilityKey(KeyCode::F7),
+    ));
+
+    // Debug Text
+    let debug_text_style = TextStyle {
+        font: assets.load("fonts/Chewy-Regular.ttf"),
+        font_size: 24.,
+        color: Color::WHITE,
+    };
+    commands.spawn((
+        TextBundle {
+            text: Text::from_sections([
+                TextSection::new("", debug_text_style.clone()),
+                TextSection::new("", debug_text_style),
+            ]),
+            visibility: Visibility::Hidden,
+            ..default()
+        },
+        RenderLayers::layer(1),
+        ToggleVisibilityKey(KeyCode::F3),
+        DebugText,
     ));
 }
 
 fn update_face_mesh(
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
-    mut entities: Query<(Entity, &Faces, &mut Handle<Mesh>, Option<&NeedToCopyMesh>), With<FaceMesh>>,
+    mut entities: Query<(Entity, &mut Handle<Mesh>, Option<&NeedToCopyMesh>), With<FaceMesh>>,
+    faces: Res<Faces>,
 ) {
-    for (entity, faces, mut mesh, need_to_copy) in &mut entities {
+    for (entity, mut mesh, need_to_copy) in &mut entities {
         if faces.faces.len() == 0 {
             continue;
         }
@@ -266,19 +290,15 @@ fn update_face_mesh(
 }
 
 fn update_face_transforms(
-    mut entities: Query<(&mut Transform, &Faces), With<FaceTransform>>,
+    faces: Res<Faces>,
+    mut entities: Query<&mut Transform, With<FaceTransform>>,
 ) {
-    for (mut transform, faces) in &mut entities {
+    for mut transform in &mut entities {
         let Some(face) = faces.faces.get(0) else {
             continue;
         };
 
-        // TODO: move this to API
-        let matrix = face.transform;//.transpose();
-        let rotation = Quat::from_mat4(&matrix);
-        let position = matrix.transform_point(Vec3::ZERO);
-        transform.translation = position;
-        transform.rotation = rotation;
+        *transform = face.transform;
     }
 }
 
@@ -301,6 +321,12 @@ fn update_free_look(
     }
     if keys.pressed(KeyCode::D) {
         translate += Vec3::X;
+    }
+    if keys.pressed(KeyCode::Q) {
+        translate -= Vec3::Y;
+    }
+    if keys.pressed(KeyCode::E) {
+        translate += Vec3::Y;
     }
     translate *= time.delta_seconds();
 
@@ -334,22 +360,30 @@ fn toggle_visibility(
     }
 }
 
-fn save_face_mesh(
-    keys: Res<Input<KeyCode>>,
-    query: Query<&Faces>,
+fn update_debug_text(
+    faces: Res<Faces>,
+    mut debug_text: Query<&mut Text, With<DebugText>>,
+    preview_camera: Query<&Transform, With<PreviewCamera>>,
 ) {
-    if !keys.just_pressed(KeyCode::F10) {
-        return;
+    for mut text in &mut debug_text {
+        if let Some(face) = faces.faces.get(0) {
+            let transform = face.transform;
+
+            text.sections[0].value = format!(
+                "face p={}\n  f={}\n  u={}\n  p1={}\n  p50={}\n  p150={}\n",
+                transform.translation, transform.forward(), transform.up(),
+                face.landmarks[0].position,
+                face.landmarks[49].position,
+                face.landmarks[149].position,
+            );
+        } else {
+            text.sections[0].value = "No face\n".into();
+        }
+
+        if let Some(transform) = preview_camera.iter().next() {
+            text.sections[1].value = format!(
+                "camera p={}\n  f={}\n  u={}\n",
+                transform.translation, transform.forward(), transform.up());
+        }
     }
-
-    let Some(face) = query.iter().next().and_then(|f| f.faces.get(0)) else {
-        return;
-    };
-
-    let mut output = String::new();
-    for landmark in &face.landmarks {
-        writeln!(&mut output, "v {} {} {}", landmark.position.x, landmark.position.y, landmark.position.z).unwrap();
-    }
-
-    std::fs::write("face.obj", &output).unwrap();
 }

@@ -4,11 +4,9 @@ use axum::{Json, Router};
 use axum::extract::{DefaultBodyLimit, State, TypedHeader};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::put;
-use bevy::asset::{AssetLoader, AssetServer};
-use bevy::prelude::{Assets, Image, Query, Res, ResMut, Resource, StandardMaterial};
+use bevy::prelude::{Assets, Image, Res, ResMut, Resource, StandardMaterial, Transform};
 use bevy::render::render_resource::{Extent3d, TextureFormat};
-use bevy::render::texture::ImageType;
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use headers::ContentLength;
 use tokio::sync::mpsc;
 use wgpu::TextureDimension;
@@ -87,18 +85,23 @@ pub struct ApiResource {
 
 pub fn update_api(
     mut api: ResMut<ApiResource>,
-    mut faces: Query<&mut Faces>,
-    cameras: Query<&WebcamTexture>,
+    mut faces: ResMut<Faces>,
+    mut webcam: Res<WebcamTexture>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     while let Ok(command) = api.rx.try_recv() {
         match command {
             Command::SetFaces(request) => {
-                for mut component in &mut faces {
-                    component.faces.clear();
-                    component.faces.extend(request.faces.iter().cloned());
-                }
+                faces.faces.clear();
+                faces.faces.extend(request.faces.into_iter().map(|f| {
+                    let transform = Transform::from_matrix(f.transform);
+                    crate::tracking::Face {
+                        landmarks: f.landmarks,
+                        blend_shapes: f.blend_shapes,
+                        transform,
+                    }
+                }));
             }
             Command::SetCamera(request) => {
                 // Convert to RGBA
@@ -108,10 +111,8 @@ pub fn update_api(
                     depth_or_array_layers: 1,
                 };
                 let image = Image::new(size, TextureDimension::D2, request.payload.to_vec(), TextureFormat::Rgba8UnormSrgb);
-                for component in &cameras {
-                    let _ = images.set(&component.image, image.clone());
-                    materials.get_mut(&component.material);
-                }
+                let _ = images.set(&webcam.image, image.clone());
+                materials.get_mut(&webcam.material);
             }
         }
     }

@@ -1,12 +1,22 @@
+use std::collections::HashMap;
+
 use anyhow::anyhow;
 use bevy::math::Vec3;
-use bevy::prelude::{Component, default, Mesh};
+use bevy::prelude::{default, Mesh, Resource, Transform};
 use bevy::reflect::List;
 use bevy::render::mesh::Indices;
 use bevy::render::render_resource::PrimitiveTopology;
-use idol_api::Face;
 
-#[derive(Debug, Default, Component)]
+use idol_api::FaceLandmark;
+
+#[derive(Debug)]
+pub struct Face {
+    pub landmarks: Vec<FaceLandmark>,
+    pub blend_shapes: HashMap<String, f32>,
+    pub transform: Transform,
+}
+
+#[derive(Debug, Default, Resource)]
 pub struct Faces {
     pub faces: Vec<Face>,
 }
