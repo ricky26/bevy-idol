@@ -46,6 +46,8 @@ fn main() -> anyhow::Result<()> {
                     }),
                     ..default()
                 }),
+            bevy_egui::EguiPlugin,
+            bevy_inspector_egui::DefaultInspectorConfigPlugin,
             bevy_obj::ObjPlugin,
             bevy_vrm::VrmPlugin,
         ))
@@ -90,6 +92,9 @@ struct FaceMesh;
 
 #[derive(Component)]
 struct FaceTransform;
+
+#[derive(Component)]
+struct FaceBlendShapes;
 
 #[derive(Component)]
 struct FreeLook {
@@ -248,6 +253,12 @@ fn init(
         ToggleVisibilityKey(KeyCode::F3),
         DebugText,
     ));
+
+    // Avatar
+    commands.spawn(SceneBundle {
+        scene: assets.load("avatars/demo.vrm"),
+        ..default()
+    });
 }
 
 fn update_face_mesh(

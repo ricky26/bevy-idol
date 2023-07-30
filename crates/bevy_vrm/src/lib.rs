@@ -8,12 +8,12 @@ mod loader;
 pub struct VrmPlugin;
 
 impl Plugin for VrmPlugin {
-    fn name(&self) -> &str {
-        "VRM"
-    }
-
     fn build(&self, app: &mut App) {
         app
             .init_asset_loader::<VrmLoader>();
+    }
+
+    fn name(&self) -> &str {
+        "VRM"
     }
 }
