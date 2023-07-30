@@ -7,6 +7,7 @@ edition = "2021"
 bevy = "0.11.0"
 bevy_vrm = { path = "../bevy_vrm" }
 idol_api = { path = "../idol_api" }
+bevy_obj = "0.11.0"
 v4l = "0.14.0"
 clap = { version = "4.3.19", features = ["derive"] }
 anyhow = "1.0.72"
@@ -20,3 +21,4 @@ headers = "0.3.8"
 wgpu = "^0.16.0"
 wgpu-hal = "^0.16.0"
 ash = "0.37.3"
+tobj = "4.0.0"

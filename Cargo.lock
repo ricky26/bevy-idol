@@ -691,6 +691,7 @@ dependencies = [
  "ash",
  "axum",
  "bevy",
+ "bevy_obj",
  "bevy_vrm",
  "bytes",
  "clap",
@@ -698,6 +699,7 @@ dependencies = [
  "idol_api",
  "log",
  "parking_lot",
+ "tobj",
  "tokio",
  "tracing-subscriber",
  "v4l",
@@ -803,6 +805,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99dde80034660f7dbb473141c31f0a746acc7229f5a06ce769aba5f16fd592ab"
 dependencies = [
  "glam",
+]
+
+[[package]]
+name = "bevy_obj"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cbe04365fda91ae1b681322bda661f0b69ede9a5bc50b3db6a97188c85bb670"
+dependencies = [
+ "anyhow",
+ "bevy_app",
+ "bevy_asset",
+ "bevy_ecs",
+ "bevy_render",
+ "bevy_utils",
+ "thiserror",
+ "tobj",
 ]
 
 [[package]]
@@ -1103,6 +1121,11 @@ dependencies = [
 [[package]]
 name = "bevy_vrm"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "gltf",
+]
 
 [[package]]
 name = "bevy_window"
@@ -1959,9 +1982,12 @@ version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f4fe8d5192923fbd783c15e74627de8e27c97e1e3dec22bf54515a407249febf"
 dependencies = [
+ "base64",
  "byteorder",
  "gltf-json",
+ "image",
  "lazy_static",
+ "urlencoding",
 ]
 
 [[package]]
@@ -2235,6 +2261,7 @@ dependencies = [
  "bytemuck",
  "byteorder",
  "color_quant",
+ "jpeg-decoder",
  "num-rational",
  "num-traits",
  "png",
@@ -2367,6 +2394,12 @@ checksum = "936cfd212a0155903bcbc060e316fb6cc7cbf2e1907329391ebadc1fe0ce77c2"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "jpeg-decoder"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc0000e42512c92e31c2252315bda326620a4e034105e900c98ec492fa077b3e"
 
 [[package]]
 name = "js-sys"
@@ -3610,6 +3643,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
+name = "tobj"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b450e3ba06251ec4fc76917dafeaf55805ffb26dbf7d5500bfb9511ce63a0d1f"
+dependencies = [
+ "ahash 0.8.3",
+]
+
+[[package]]
 name = "tokio"
 version = "1.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3789,6 +3831,12 @@ name = "unicode-xid"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f962df74c8c05a667b5ee8bcf162993134c104e96440b663c8daa176dc772d8c"
+
+[[package]]
+name = "urlencoding"
+version = "2.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8db7427f936968176eaa7cdf81b7f98b980b18495ec28f1b5791ac3bfe3eea9"
 
 [[package]]
 name = "utf8parse"

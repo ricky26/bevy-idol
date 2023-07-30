@@ -1,14 +1,17 @@
 use std::sync::Arc;
 
 use axum::{Json, Router};
-use axum::extract::{State, TypedHeader};
+use axum::extract::{DefaultBodyLimit, State, TypedHeader};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::put;
-use bevy::prelude::{Assets, Image, Query, ResMut, Resource};
-use bevy::render::render_resource::Extent3d;
-use bytes::Bytes;
+use bevy::asset::{AssetLoader, AssetServer};
+use bevy::prelude::{Assets, Image, Query, Res, ResMut, Resource, StandardMaterial};
+use bevy::render::render_resource::{Extent3d, TextureFormat};
+use bevy::render::texture::ImageType;
+use bytes::{Buf, Bytes};
 use headers::ContentLength;
 use tokio::sync::mpsc;
+use wgpu::TextureDimension;
 
 use idol_api::{ApiError, SetCameraRequest, SetFacesRequest};
 
@@ -74,6 +77,7 @@ pub fn new_api() -> Router<Arc<ApiState>> {
     Router::new()
         .route("/v1/camera", put(put_camera))
         .route("/v1/faces", put(put_faces))
+        .layer(DefaultBodyLimit::disable())
 }
 
 #[derive(Resource)]
@@ -84,8 +88,9 @@ pub struct ApiResource {
 pub fn update_api(
     mut api: ResMut<ApiResource>,
     mut faces: Query<&mut Faces>,
-    mut cameras: Query<&WebcamTexture>,
+    cameras: Query<&WebcamTexture>,
     mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     while let Ok(command) = api.rx.try_recv() {
         match command {
@@ -96,15 +101,16 @@ pub fn update_api(
                 }
             }
             Command::SetCamera(request) => {
-                for component in &mut cameras {
-                    if let Some(image) = images.get_mut(&component.image) {
-                        image.resize(Extent3d {
-                            width: request.width,
-                            height: request.height,
-                            depth_or_array_layers: 1,
-                        });
-                        image.data.copy_from_slice(&request.payload);
-                    }
+                // Convert to RGBA
+                let size = Extent3d {
+                    width: request.width,
+                    height: request.height,
+                    depth_or_array_layers: 1,
+                };
+                let image = Image::new(size, TextureDimension::D2, request.payload.to_vec(), TextureFormat::Rgba8UnormSrgb);
+                for component in &cameras {
+                    let _ = images.set(&component.image, image.clone());
+                    materials.get_mut(&component.material);
                 }
             }
         }

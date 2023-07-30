@@ -1,14 +1,19 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+use bevy::app::{App, Plugin};
+use bevy::asset::AddAsset;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+use crate::loader::VrmLoader;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+mod loader;
+
+pub struct VrmPlugin;
+
+impl Plugin for VrmPlugin {
+    fn name(&self) -> &str {
+        "VRM"
+    }
+
+    fn build(&self, app: &mut App) {
+        app
+            .init_asset_loader::<VrmLoader>();
     }
 }
