@@ -1,5 +1,3 @@
-use std::fmt::Write;
-
 use bevy::core_pipeline::clear_color::ClearColorConfig;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
@@ -47,7 +45,7 @@ fn main() -> anyhow::Result<()> {
                     ..default()
                 }),
             bevy_egui::EguiPlugin,
-            bevy_inspector_egui::DefaultInspectorConfigPlugin,
+            bevy_inspector_egui::quick::WorldInspectorPlugin::default(),
             bevy_obj::ObjPlugin,
             bevy_vrm::VrmPlugin,
         ))

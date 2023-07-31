@@ -86,7 +86,7 @@ pub struct ApiResource {
 pub fn update_api(
     mut api: ResMut<ApiResource>,
     mut faces: ResMut<Faces>,
-    mut webcam: Res<WebcamTexture>,
+    webcam: Res<WebcamTexture>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
