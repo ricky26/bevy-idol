@@ -1,12 +1,20 @@
+use std::path::PathBuf;
+use std::fmt::Write;
+
 use bevy::core_pipeline::clear_color::ClearColorConfig;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::render::camera::RenderTarget;
+use bevy::render::mesh::morph::MeshMorphWeights;
 use bevy::render::mesh::VertexAttributeValues;
+use bevy::render::render_resource::Face;
 use bevy::render::view::RenderLayers;
 use bevy::window::{WindowRef, WindowResolution};
 use clap::Parser;
 
+use bevy_vrm::VrmBundle;
+
+use crate::add_blend_shapes::{AddBlendShapes, apply_blend_shapes, BlendShapeLibrary};
 use crate::cameras::{OutputCamera, PreviewCamera};
 use crate::tracking::Faces;
 use crate::webcam::WebcamTexture;
@@ -14,9 +22,9 @@ use crate::webcam::WebcamTexture;
 mod api;
 mod tracking;
 mod webcam;
-mod output;
 mod cameras;
 mod debug_mesh;
+mod add_blend_shapes;
 
 #[derive(Parser, Resource)]
 struct Options {
@@ -30,6 +38,8 @@ struct Options {
     pub output_width: u32,
     #[arg(long, short = 'H', default_value = "1080")]
     pub output_height: u32,
+    #[arg(long)]
+    pub extra_blend_shapes: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -58,6 +68,10 @@ fn main() -> anyhow::Result<()> {
             update_free_look,
             toggle_visibility,
             update_debug_text,
+            update_camera_plane,
+            apply_blend_shapes,
+            update_morph_targets,
+            dump_state,
         ))
         .add_systems(Startup, init);
     let options = Options::parse();
@@ -65,6 +79,15 @@ fn main() -> anyhow::Result<()> {
         .enable_all()
         .build()
         .unwrap();
+
+    if let Some(path) = options.extra_blend_shapes.as_ref() {
+        let contents = std::fs::read(path)?;
+        let library = BlendShapeLibrary::from_slice(&contents)?;
+        log::info!("loaded {} extra blend shapes", library.blend_shapes.len());
+        app.insert_resource(ExtraBlendShapesLibrary {
+            library,
+        });
+    }
 
     let api_addr = options.api_bind.parse()?;
     let (api_state, api_resource) = api::ApiState::new();
@@ -101,13 +124,22 @@ struct FreeLook {
 }
 
 #[derive(Component)]
+struct CameraPlane;
+
+#[derive(Component)]
 struct ToggleVisibilityKey(KeyCode);
 
 #[derive(Component)]
 struct DebugText;
 
+#[derive(Resource)]
+struct ExtraBlendShapesLibrary {
+    library: BlendShapeLibrary,
+}
+
 fn init(
     assets: Res<AssetServer>,
+    extra_blend_shapes: Option<Res<ExtraBlendShapesLibrary>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
@@ -120,10 +152,12 @@ fn init(
         ..default()
     });
 
+    // Preview Camera
     commands.spawn((
+        Name::from("Preview Camera"),
         Camera3dBundle {
-            transform: Transform::from_xyz(0., 0., -10.)
-                .looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0., 1., -2.)
+                .looking_at(Vec3::new(0., 1., 0.), Vec3::Y),
             ..default()
         },
         RenderLayers::from_layers(&[0, 1]),
@@ -136,6 +170,7 @@ fn init(
 
     // Debug Face
     commands.spawn((
+        Name::from("Debug Face"),
         PbrBundle {
             mesh: assets.load("meshes/canonical_face_model.dobj"),
             material: materials.add(StandardMaterial {
@@ -144,7 +179,7 @@ fn init(
                 ..default()
             }),
             transform: Transform::default()
-                .with_scale(Vec3::ONE * 10.),
+                .with_scale(Vec3::ONE),
             visibility: Visibility::Hidden,
             ..default()
         },
@@ -156,19 +191,23 @@ fn init(
 
     // Output window
     let output_window = commands
-        .spawn(Window {
-            title: "Bevy Idol [Output]".into(),
-            transparent: true,
-            resizable: false,
-            resolution: WindowResolution::new(options.output_width as f32, options.output_height as f32)
-                .with_scale_factor_override(1.),
-            ..default()
-        })
+        .spawn((
+            Name::from("Output Window"),
+            Window {
+                title: "Bevy Idol [Output]".into(),
+                transparent: true,
+                resizable: false,
+                resolution: WindowResolution::new(options.output_width as f32, options.output_height as f32)
+                    .with_scale_factor_override(1.),
+                ..default()
+            },
+        ))
         .id();
     commands.spawn((
+        Name::from("Output Camera"),
         Camera3dBundle {
-            transform: Transform::from_xyz(0., 0., -10.)
-                .looking_at(Vec3::ZERO, Vec3::Y),
+            transform: Transform::from_xyz(0., 1.35, -1.)
+                .looking_at(Vec3::new(0., 1.35, 0.), Vec3::Y),
             camera: Camera {
                 target: RenderTarget::Window(WindowRef::Entity(output_window)),
                 ..default()
@@ -186,21 +225,41 @@ fn init(
         OutputCamera,
     ));
 
-    // Test Sphere
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Mesh::try_from(shape::Icosphere {
-                radius: 1.0,
-                subdivisions: 16,
-            }).unwrap()),
-            material: materials.add(StandardMaterial {
-                base_color: Color::rgb(1.0, 0.0, 1.0),
+    // Debug Marker
+    commands
+        .spawn((
+            Name::from("Debug Marker"),
+            PbrBundle {
+                mesh: meshes.add(Mesh::from(shape::Cube {
+                    size: 1.0,
+                })),
+                material: materials.add(StandardMaterial {
+                    base_color: Color::rgb(1.0, 0.0, 1.0),
+                    ..default()
+                }),
+                visibility: Visibility::Hidden,
                 ..default()
-            }),
-            ..default()
-        },
-        FaceTransform,
-    ));
+            },
+            FaceTransform,
+            ToggleVisibilityKey(KeyCode::F9),
+        ))
+        .with_children(|parent| {
+            parent
+                .spawn((
+                    PbrBundle {
+                        transform: Transform::from_xyz(0., 0., -0.5),
+                        mesh: meshes.add(Mesh::try_from(shape::Icosphere {
+                            radius: 0.4,
+                            subdivisions: 16,
+                        }).unwrap()),
+                        material: materials.add(StandardMaterial {
+                            base_color: Color::rgb(1.0, 0.0, 1.0),
+                            ..default()
+                        }),
+                        ..default()
+                    },
+                ));
+        });
 
     // Camera plane
     let mut camera_image = Image::default();
@@ -210,6 +269,7 @@ fn init(
         base_color_texture: Some(camera_image.clone()),
         perceptual_roughness: 1.,
         unlit: true,
+        cull_mode: Some(Face::Front),
         ..default()
     });
     commands.insert_resource(WebcamTexture {
@@ -217,17 +277,19 @@ fn init(
         material: camera_material.clone(),
     });
     commands.spawn((
+        Name::from("Camera Plane"),
         PbrBundle {
             mesh: meshes.add(Mesh::from(shape::Plane {
                 size: 5.,
                 subdivisions: 1,
             })),
             material: camera_material,
-            transform: Transform::from_xyz(0., 1., 0.)
+            transform: Transform::from_xyz(0., 1., 2.)
                 .with_rotation(Quat::from_rotation_x(std::f32::consts::PI * -0.5)),
             visibility: Visibility::Hidden,
             ..default()
         },
+        CameraPlane,
         RenderLayers::layer(1),
         ToggleVisibilityKey(KeyCode::F7),
     ));
@@ -242,6 +304,7 @@ fn init(
         TextBundle {
             text: Text::from_sections([
                 TextSection::new("", debug_text_style.clone()),
+                TextSection::new("", debug_text_style.clone()),
                 TextSection::new("", debug_text_style),
             ]),
             visibility: Visibility::Hidden,
@@ -253,10 +316,22 @@ fn init(
     ));
 
     // Avatar
-    commands.spawn(SceneBundle {
-        scene: assets.load("avatars/demo.vrm"),
-        ..default()
-    });
+    let mut avatar = commands.spawn((
+        Name::from("Avatar"),
+        VrmBundle {
+            vrm: assets.load("avatars/demo.vrm"),
+            transform: Transform::default()
+                .looking_at(Vec3::Z, Vec3::Y),
+            ..default()
+        },
+    ));
+
+    if let Some(extra_blend_shapes) = extra_blend_shapes.as_ref() {
+        avatar
+            .insert(AddBlendShapes {
+                blend_shapes: extra_blend_shapes.library.blend_shapes.clone(),
+            });
+    }
 }
 
 fn update_face_mesh(
@@ -377,14 +452,15 @@ fn update_debug_text(
     for mut text in &mut debug_text {
         if let Some(face) = faces.faces.get(0) {
             let transform = face.transform;
-
-            text.sections[0].value = format!(
+            let face_text = format!(
                 "face p={}\n  f={}\n  u={}\n  p1={}\n  p50={}\n  p150={}\n",
                 transform.translation, transform.forward(), transform.up(),
                 face.landmarks[0].position,
                 face.landmarks[49].position,
                 face.landmarks[149].position,
             );
+
+            text.sections[0].value = face_text;
         } else {
             text.sections[0].value = "No face\n".into();
         }
@@ -395,4 +471,80 @@ fn update_debug_text(
                 transform.translation, transform.forward(), transform.up());
         }
     }
+}
+
+fn update_camera_plane(
+    webcam: Res<WebcamTexture>,
+    images: Res<Assets<Image>>,
+    mut query: Query<&mut Transform, With<CameraPlane>>,
+) {
+    let Some(image) = images.get(&webcam.image) else {
+        return;
+    };
+
+    let size = image.texture_descriptor.size;
+
+    let (x, y) = if size.width > size.height {
+        ((size.width as f32) / (size.height as f32), 1.)
+    } else {
+        (1., (size.height as f32) / (size.width as f32))
+    };
+
+    for mut transform in &mut query {
+        transform.scale.x = x;
+        transform.scale.z = -y;
+    }
+}
+
+fn update_morph_targets(
+    faces: Res<Faces>,
+    meshes: Res<Assets<Mesh>>,
+    mut entities: Query<(&Handle<Mesh>, &mut MeshMorphWeights)>,
+) {
+    let Some(face) = faces.faces.get(0) else {
+        return;
+    };
+    let blend_shapes = &face.blend_shapes;
+
+    for (mesh, mut weights) in &mut entities {
+        let Some(mesh) = meshes.get(mesh) else {
+            continue;
+        };
+
+        let Some(names) = mesh.morph_target_names() else {
+            continue;
+        };
+
+        let weights = weights.weights_mut();
+        for (name, weight) in names.iter().zip(weights.iter_mut()) {
+            *weight = blend_shapes.get(name.as_str()).copied().unwrap_or(0.);
+        }
+    }
+}
+
+fn dump_state(
+    keys: Res<Input<KeyCode>>,
+    faces: Res<Faces>,
+) {
+    if !keys.just_pressed(KeyCode::F11) {
+        return;
+    }
+
+    let mut out = String::new();
+
+    for face in &faces.faces {
+        writeln!(&mut out, "face").unwrap();
+
+        let mut shapes = face.blend_shapes.iter()
+            .map(|(a, b)| (a.clone(), *b))
+            .collect::<Vec<_>>();
+        shapes.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+        for (shape, weight) in shapes {
+            writeln!(&mut out, "  shape {shape} = {weight}").unwrap();
+        }
+
+    }
+
+    std::fs::write("out.txt", out).unwrap();
 }

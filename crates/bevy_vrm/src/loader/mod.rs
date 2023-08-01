@@ -29,22 +29,18 @@ use bevy::scene::Scene;
 use bevy::tasks::IoTaskPool;
 use bevy::transform::components::Transform;
 use bevy::utils::{HashMap, HashSet};
-use gltf::{
-    accessor::Iter,
-    Material,
-    mesh::{Mode, util::ReadIndices},
-    Node, Primitive, texture::{MagFilter, MinFilter, WrappingMode},
-};
+use gltf::{accessor::Iter, Glb, Material, mesh::{Mode, util::ReadIndices}, Node, Primitive, texture::{MagFilter, MinFilter, WrappingMode}};
 use serde::Deserialize;
 use thiserror::Error;
 
 use vertex_attributes::*;
+use crate::Vrm;
 
 mod vertex_attributes;
 
 /// An error that occurs when loading a glTF file.
 #[derive(Error, Debug)]
-pub enum GltfError {
+pub enum VrmError {
     #[error("unsupported primitive mode")]
     UnsupportedPrimitive { mode: Mode },
     #[error("invalid glTF file: {0}")]
@@ -81,7 +77,7 @@ impl AssetLoader for VrmLoader {
         bytes: &'a [u8],
         load_context: &'a mut LoadContext,
     ) -> BoxedFuture<'a, Result<()>> {
-        Box::pin(async move { Ok(load_gltf(bytes, load_context, self).await?) })
+        Box::pin(async move { Ok(load_vrm(bytes, load_context, self).await?) })
     }
 
     fn extensions(&self) -> &[&str] {
@@ -89,14 +85,39 @@ impl AssetLoader for VrmLoader {
     }
 }
 
-/// Loads an entire glTF file.
-async fn load_gltf<'a, 'b>(
+fn load_maybe_glb(src: &[u8]) -> Result<Glb, gltf::Error> {
+    if src.starts_with(b"glTF") {
+        Ok(Glb::from_slice(src)?)
+    } else {
+        Ok(Glb {
+            header: gltf::binary::Header {
+                magic: [0, 0, 0, 0],
+                version: 0,
+                length: 0,
+            },
+            json: src.into(),
+            bin: None,
+        })
+    }
+}
+
+async fn load_vrm<'a, 'b>(
     bytes: &'a [u8],
     load_context: &'a mut LoadContext<'b>,
     loader: &VrmLoader,
-) -> Result<(), GltfError> {
-    let gltf = gltf::Gltf::from_slice(bytes)?;
+) -> Result<(), VrmError> {
+    let glb = load_maybe_glb(bytes)?;
+    let root = gltf::json::deserialize::from_slice(&glb.json)
+        .map_err(gltf::Error::from)?;
+    let document = gltf::Document::from_json(root)?;
+    let gltf = gltf::Gltf {
+        document,
+        blob: glb.bin.map(From::from),
+    };
     let buffer_data = load_buffers(&gltf, load_context, load_context.path()).await?;
+    let vrm_root = serde_json::from_slice::<crate::extensions::ExtendedRoot>(&glb.json)
+        .map_err(gltf::Error::from)?;
+    let vrm_metadata = &vrm_root.extensions.vrm;
 
     let mut materials = vec![];
     let mut named_materials = HashMap::default();
@@ -121,100 +142,7 @@ async fn load_gltf<'a, 'b>(
         }
     }
 
-    #[cfg(feature = "bevy_animation")]
-        let paths = {
-        let mut paths = HashMap::<usize, (usize, Vec<Name>)>::new();
-        for scene in gltf.scenes() {
-            for node in scene.nodes() {
-                let root_index = node.index();
-                paths_recur(node, &[], &mut paths, root_index);
-            }
-        }
-        paths
-    };
-
-    #[cfg(feature = "bevy_animation")]
-        let (animations, named_animations, animation_roots) = {
-        use bevy_animation::Keyframes;
-        use gltf::animation::util::ReadOutputs;
-        let mut animations = vec![];
-        let mut named_animations = HashMap::default();
-        let mut animation_roots = HashSet::default();
-        for animation in gltf.animations() {
-            let mut animation_clip = bevy_animation::AnimationClip::default();
-            for channel in animation.channels() {
-                match channel.sampler().interpolation() {
-                    gltf::animation::Interpolation::Linear => (),
-                    other => warn!(
-                        "Animation interpolation {:?} is not supported, will use linear",
-                        other
-                    ),
-                };
-                let node = channel.target().node();
-                let reader = channel.reader(|buffer| Some(&buffer_data[buffer.index()]));
-                let keyframe_timestamps: Vec<f32> = if let Some(inputs) = reader.read_inputs() {
-                    match inputs {
-                        gltf::accessor::Iter::Standard(times) => times.collect(),
-                        gltf::accessor::Iter::Sparse(_) => {
-                            warn!("Sparse accessor not supported for animation sampler input");
-                            continue;
-                        }
-                    }
-                } else {
-                    warn!("Animations without a sampler input are not supported");
-                    return Err(GltfError::MissingAnimationSampler(animation.index()));
-                };
-
-                let keyframes = if let Some(outputs) = reader.read_outputs() {
-                    match outputs {
-                        ReadOutputs::Translations(tr) => {
-                            Keyframes::Translation(tr.map(Vec3::from).collect())
-                        }
-                        ReadOutputs::Rotations(rots) => Keyframes::Rotation(
-                            rots.into_f32().map(bevy_math::Quat::from_array).collect(),
-                        ),
-                        ReadOutputs::Scales(scale) => {
-                            Keyframes::Scale(scale.map(Vec3::from).collect())
-                        }
-                        ReadOutputs::MorphTargetWeights(weights) => {
-                            Keyframes::Weights(weights.into_f32().collect())
-                        }
-                    }
-                } else {
-                    warn!("Animations without a sampler output are not supported");
-                    return Err(GltfError::MissingAnimationSampler(animation.index()));
-                };
-
-                if let Some((root_index, path)) = paths.get(&node.index()) {
-                    animation_roots.insert(root_index);
-                    animation_clip.add_curve_to_path(
-                        bevy_animation::EntityPath {
-                            parts: path.clone(),
-                        },
-                        bevy_animation::VariableCurve {
-                            keyframe_timestamps,
-                            keyframes,
-                        },
-                    );
-                } else {
-                    warn!(
-                        "Animation ignored for node {}: part of its hierarchy is missing a name",
-                        node.index()
-                    );
-                }
-            }
-            let handle = load_context.set_labeled_asset(
-                &format!("Animation{}", animation.index()),
-                LoadedAsset::new(animation_clip),
-            );
-            if let Some(name) = animation.name() {
-                named_animations.insert(name.to_string(), handle.clone());
-            }
-            animations.push(handle);
-        }
-        (animations, named_animations, animation_roots)
-    };
-
+    let mut meshes = Vec::new();
     for gltf_mesh in gltf.meshes() {
         for primitive in gltf_mesh.primitives() {
             let primitive_label = primitive_label(&gltf_mesh, &primitive);
@@ -304,7 +232,8 @@ async fn load_gltf<'a, 'b>(
                 }
             }
 
-            load_context.set_labeled_asset(&primitive_label, LoadedAsset::new(mesh));
+            let handle = load_context.set_labeled_asset(&primitive_label, LoadedAsset::new(mesh));
+            meshes.push(handle);
         }
     }
 
@@ -373,7 +302,8 @@ async fn load_gltf<'a, 'b>(
         })
         .collect();
 
-    let mut has_default = false;
+    let mut default_scene = None;
+    let mut scenes = HashMap::new();
     let mut active_camera_found = false;
     for scene in gltf.scenes() {
         let mut err = None;
@@ -417,21 +347,22 @@ async fn load_gltf<'a, 'b>(
             });
         }
 
-        let new_scene = Scene::new(world);
+        let scene_label = scene_label(&scene);
+        let scene_handle = load_context.set_labeled_asset(
+            &scene_label, LoadedAsset::new(Scene::new(world)));
 
-        if !has_default {
-            has_default = true;
-            load_context.set_default_asset(LoadedAsset::new(new_scene));
-        } else {
-            load_context.set_labeled_asset(
-                &scene_label(&scene), LoadedAsset::new(new_scene));
+        let scene_name = scene.name().map_or(scene_label, |n| n.to_owned());
+        if default_scene.is_none() {
+            default_scene = Some(scene_name.clone());
         }
+        scenes.insert(scene_name, scene_handle);
     }
 
-    if !has_default {
-        return Err(GltfError::MissingBlob);
-    }
-
+    load_context.set_default_asset(LoadedAsset::new(Vrm {
+        meshes,
+        default_scene,
+        scenes,
+    }));
     Ok(())
 }
 
@@ -450,7 +381,7 @@ async fn load_texture<'a>(
     linear_textures: &HashSet<usize>,
     load_context: &LoadContext<'a>,
     supported_compressed_formats: CompressedImageFormats,
-) -> Result<(Image, String), GltfError> {
+) -> Result<(Image, String), VrmError> {
     let is_srgb = !linear_textures.contains(&gltf_texture.index());
     let mut texture = match gltf_texture.source().source() {
         gltf::image::Source::View { view, mime_type } => {
@@ -575,7 +506,7 @@ fn load_node(
     node_index_to_entity_map: &mut HashMap<usize, Entity>,
     entity_to_skin_index_map: &mut HashMap<Entity, usize>,
     active_camera_found: &mut bool,
-) -> Result<(), GltfError> {
+) -> Result<(), VrmError> {
     let transform = gltf_node.transform();
     let mut gltf_error = None;
     let transform = Transform::from_matrix(Mat4::from_cols_array_2d(&transform.matrix()));
@@ -818,14 +749,14 @@ fn texture_address_mode(gltf_address_mode: &gltf::texture::WrappingMode) -> Addr
 }
 
 /// Maps the `primitive_topology` form glTF to `wgpu`.
-fn get_primitive_topology(mode: Mode) -> Result<PrimitiveTopology, GltfError> {
+fn get_primitive_topology(mode: Mode) -> Result<PrimitiveTopology, VrmError> {
     match mode {
         Mode::Points => Ok(PrimitiveTopology::PointList),
         Mode::Lines => Ok(PrimitiveTopology::LineList),
         Mode::LineStrip => Ok(PrimitiveTopology::LineStrip),
         Mode::Triangles => Ok(PrimitiveTopology::TriangleList),
         Mode::TriangleStrip => Ok(PrimitiveTopology::TriangleStrip),
-        mode => Err(GltfError::UnsupportedPrimitive { mode }),
+        mode => Err(VrmError::UnsupportedPrimitive { mode }),
     }
 }
 
@@ -842,7 +773,7 @@ async fn load_buffers(
     gltf: &gltf::Gltf,
     load_context: &LoadContext<'_>,
     asset_path: &Path,
-) -> Result<Vec<Vec<u8>>, GltfError> {
+) -> Result<Vec<Vec<u8>>, VrmError> {
     const VALID_MIME_TYPES: &[&str] = &["application/octet-stream", "application/gltf-buffer"];
 
     let mut buffer_data = Vec::new();
@@ -857,7 +788,7 @@ async fn load_buffers(
                     Ok(data_uri) if VALID_MIME_TYPES.contains(&data_uri.mime_type) => {
                         data_uri.decode()?
                     }
-                    Ok(_) => return Err(GltfError::BufferFormatUnsupported),
+                    Ok(_) => return Err(VrmError::BufferFormatUnsupported),
                     Err(()) => {
                         // TODO: Remove this and add dep
                         let buffer_path = asset_path.parent().unwrap().join(uri);
@@ -870,7 +801,7 @@ async fn load_buffers(
                 if let Some(blob) = gltf.blob.as_deref() {
                     buffer_data.push(blob.into());
                 } else {
-                    return Err(GltfError::MissingBlob);
+                    return Err(VrmError::MissingBlob);
                 }
             }
         }

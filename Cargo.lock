@@ -772,7 +772,6 @@ name = "bevy_idol"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "ash",
  "axum",
  "bevy",
  "bevy-inspector-egui",
@@ -785,12 +784,11 @@ dependencies = [
  "idol_api",
  "log",
  "parking_lot",
- "tobj",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing-subscriber",
  "v4l",
- "wgpu",
- "wgpu-hal",
 ]
 
 [[package]]
