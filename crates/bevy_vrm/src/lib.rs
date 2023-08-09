@@ -1,5 +1,6 @@
 use bevy::app::{App, Plugin, Update};
 use bevy::asset::{AddAsset, Assets, Handle};
+use bevy::pbr::MaterialPlugin;
 use bevy::prelude::{Bundle, Commands, ComputedVisibility, Entity, GlobalTransform, Mesh, Query, Res, Transform, Visibility, Without};
 use bevy::reflect::{TypePath, TypeUuid};
 use bevy::render::renderer::RenderDevice;
@@ -8,6 +9,7 @@ use bevy::scene::Scene;
 use bevy::utils::HashMap;
 
 pub use loader::{VrmError, VrmLoader};
+use crate::extensions::mtoon::MToonMaterial;
 
 pub mod extensions;
 
@@ -56,6 +58,7 @@ impl Plugin for VrmPlugin {
             None => CompressedImageFormats::all(),
         };
         app
+            .add_plugins(MaterialPlugin::<MToonMaterial>::default())
             .add_asset_loader(VrmLoader {
                 supported_compressed_formats,
                 custom_vertex_attributes: Default::default(),

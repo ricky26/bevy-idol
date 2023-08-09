@@ -10,7 +10,7 @@ use bevy::core::Name;
 use bevy::hierarchy::{BuildWorldChildren, WorldChildBuilder};
 use bevy::log;
 use bevy::math::{Mat4, Vec3};
-use bevy::pbr::{AlphaMode, PbrBundle, StandardMaterial};
+use bevy::pbr::{AlphaMode, MaterialMeshBundle, PbrBundle, StandardMaterial};
 use bevy::prelude::{Camera3dBundle, Entity, World};
 use bevy::render::{
     camera::{Camera, OrthographicProjection, PerspectiveProjection, Projection, ScalingMode},
@@ -29,11 +29,14 @@ use bevy::scene::Scene;
 use bevy::tasks::IoTaskPool;
 use bevy::transform::components::Transform;
 use bevy::utils::{HashMap, HashSet};
-use gltf::{accessor::Iter, Glb, Material, mesh::{Mode, util::ReadIndices}, Node, Primitive, texture::{MagFilter, MinFilter, WrappingMode}};
+use gltf::{accessor::Iter, Glb, mesh::{Mode, util::ReadIndices}, Primitive, texture::{MagFilter, MinFilter, WrappingMode}};
 use serde::Deserialize;
 use thiserror::Error;
 
 use vertex_attributes::*;
+
+use crate::extensions::{ExtendedMaterial, ExtendedRoot};
+use crate::extensions::mtoon::MToonMaterial;
 use crate::Vrm;
 
 mod vertex_attributes;
@@ -85,6 +88,12 @@ impl AssetLoader for VrmLoader {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum MaterialType {
+    StandardMaterial,
+    MToonMaterial,
+}
+
 fn load_maybe_glb(src: &[u8]) -> Result<Glb, gltf::Error> {
     if src.starts_with(b"glTF") {
         Ok(Glb::from_slice(src)?)
@@ -115,19 +124,18 @@ async fn load_vrm<'a, 'b>(
         blob: glb.bin.map(From::from),
     };
     let buffer_data = load_buffers(&gltf, load_context, load_context.path()).await?;
-    let vrm_root = serde_json::from_slice::<crate::extensions::ExtendedRoot>(&glb.json)
+    let vrm_root = serde_json::from_slice::<ExtendedRoot>(&glb.json)
         .map_err(gltf::Error::from)?;
-    let vrm_metadata = &vrm_root.extensions.vrm;
+    // let vrm_metadata = &vrm_root.extensions.vrm;
 
-    let mut materials = vec![];
-    let mut named_materials = HashMap::default();
+    let mut material_types = Vec::new();
     let mut linear_textures = HashSet::default();
     for material in gltf.materials() {
-        let handle = load_material(&material, load_context);
-        if let Some(name) = material.name() {
-            named_materials.insert(name.to_string(), handle.clone());
-        }
-        materials.push(handle);
+        let extended_material = material.index().map(|i| &vrm_root.materials[i]);
+
+        let material_type = load_material(&material, extended_material, load_context);
+        material_types.push(material_type);
+
         if let Some(texture) = material.normal_texture() {
             linear_textures.insert(texture.texture().index());
         }
@@ -317,6 +325,8 @@ async fn load_vrm<'a, 'b>(
                 for node in scene.nodes() {
                     let result = load_node(
                         &node,
+                        &vrm_root,
+                        &material_types,
                         parent,
                         load_context,
                         &mut node_index_to_entity_map,
@@ -366,7 +376,7 @@ async fn load_vrm<'a, 'b>(
     Ok(())
 }
 
-fn node_name(node: &Node) -> Name {
+fn node_name(node: &gltf::Node) -> Name {
     let name = node
         .name()
         .map(|s| s.to_string())
@@ -427,12 +437,17 @@ async fn load_texture<'a>(
 }
 
 /// Loads a glTF material as a bevy [`StandardMaterial`] and returns it.
-fn load_material(material: &Material, load_context: &mut LoadContext) -> Handle<StandardMaterial> {
+fn load_material(
+    material: &gltf::Material,
+    ext: Option<&ExtendedMaterial>,
+    load_context: &mut LoadContext,
+) -> MaterialType {
     let material_label = material_label(material);
 
     let pbr = material.pbr_metallic_roughness();
 
     let color = pbr.base_color_factor();
+    let base_color = Color::rgba_linear(color[0], color[1], color[2], color[3]);
     let base_color_texture = pbr.base_color_texture().map(|info| {
         // TODO: handle info.tex_coord() (the *set* index for the right texcoords)
         let label = texture_label(&info.texture());
@@ -465,6 +480,7 @@ fn load_material(material: &Material, load_context: &mut LoadContext) -> Handle<
     });
 
     let emissive = material.emissive_factor();
+    let emissive = Color::rgb_linear(emissive[0], emissive[1], emissive[2]);
     let emissive_texture = material.emissive_texture().map(|info| {
         // TODO: handle occlusion_texture.tex_coord() (the *set* index for the right texcoords)
         // TODO: handle occlusion_texture.strength() (a scalar multiplier for occlusion strength)
@@ -473,10 +489,94 @@ fn load_material(material: &Material, load_context: &mut LoadContext) -> Handle<
         load_context.get_handle(path)
     });
 
+    if let Some(mtoon) = ext.and_then(|m| m.extensions.mtoon.as_ref()) {
+        let shade_color_texture = mtoon.shade_multiply_texture.as_ref().map(|info| {
+            let label = texture_label_index(info.index as usize);
+            let path = AssetPath::new_ref(load_context.path(), Some(&label));
+            load_context.get_handle(path)
+        });
+
+        let (shading_shift_texture, shading_shift_scale) = mtoon.shading_shift_texture
+            .as_ref()
+            .map_or((None, 1.), |info| {
+                log::info!("SHADING SHIFT");
+                let label = texture_label_index(info.texture_info.index as usize);
+                let path = AssetPath::new_ref(load_context.path(), Some(&label));
+                (Some(load_context.get_handle(path)), info.scale)
+            });
+
+        let matcap_texture = mtoon.matcap_texture.as_ref().map(|info| {
+            let label = texture_label_index(info.index as usize);
+            let path = AssetPath::new_ref(load_context.path(), Some(&label));
+            load_context.get_handle(path)
+        });
+
+        let rim_multiply_texture = mtoon.rim_multiply_texture.as_ref().map(|info| {
+            let label = texture_label_index(info.index as usize);
+            let path = AssetPath::new_ref(load_context.path(), Some(&label));
+            load_context.get_handle(path)
+        });
+
+        // let outline_width_multiply_texture = mtoon.outline_width_multiply_texture
+        //     .as_ref()
+        //     .map(|info| {
+        //         let label = texture_label_index(info.index as usize);
+        //         let path = AssetPath::new_ref(load_context.path(), Some(&label));
+        //         load_context.get_handle(path)
+        //     });
+
+        let material = MToonMaterial {
+            alpha_mode: alpha_mode(material),
+            double_sided: material.double_sided(),
+            cull_mode: if material.double_sided() {
+                None
+            } else {
+                Some(Face::Back)
+            },
+            transparent_with_z_write: mtoon.transparent_with_z_write,
+            depth_bias: mtoon.render_queue_offset_number,
+            base_color,
+            base_color_texture,
+            emissive,
+            emissive_texture,
+            normal_map_texture,
+            shade_color: Color::rgb(
+                mtoon.shade_color_factor.x,
+                mtoon.shade_color_factor.y,
+                mtoon.shade_color_factor.z,
+            ),
+            shade_color_texture,
+            shading_shift_factor: mtoon.shading_shift_factor,
+            shading_shift_scale,
+            shading_shift_texture,
+            shading_toony_factor: mtoon.shading_toony_factor,
+            gi_equalization_factor: mtoon.gi_equalization_factor,
+            matcap_factor: mtoon.matcap_factor,
+            matcap_texture,
+            parametric_rim_color_factor: mtoon.parametric_rim_color_factor,
+            rim_color_texture: rim_multiply_texture,
+            rim_lighting_mix_factor: mtoon.rim_lighting_mix_factor,
+            parametric_rim_fresnel_power_factor: mtoon.parametric_rim_fresnel_power_factor,
+            parametric_rim_lift_factor: mtoon.parametric_rim_lift_factor,
+            // outline_width_mode: mtoon.outline_width_mode,
+            // outline_width_factor: mtoon.outline_width_factor,
+            // outline_width_multiply_texture,
+            // outline_color_factor: mtoon.outline_color_factor,
+            // outline_lighting_mix_factor: mtoon.outline_lighting_mix_factor,
+            uv_animation_scroll_x_speed_factor: mtoon.uv_animation_scroll_x_speed_factor,
+            uv_animation_scroll_y_speed_factor: mtoon.uv_animation_scroll_y_speed_factor,
+            uv_animation_rotation_speed_factor: mtoon.uv_animation_rotation_speed_factor,
+            ..Default::default()
+        };
+
+        load_context.set_labeled_asset(&material_label, LoadedAsset::new(material));
+        return MaterialType::MToonMaterial;
+    }
+
     load_context.set_labeled_asset(
         &material_label,
         LoadedAsset::new(StandardMaterial {
-            base_color: Color::rgba_linear(color[0], color[1], color[2], color[3]),
+            base_color,
             base_color_texture,
             perceptual_roughness: pbr.roughness_factor(),
             metallic: pbr.metallic_factor(),
@@ -489,18 +589,21 @@ fn load_material(material: &Material, load_context: &mut LoadContext) -> Handle<
                 Some(Face::Back)
             },
             occlusion_texture,
-            emissive: Color::rgb_linear(emissive[0], emissive[1], emissive[2]),
+            emissive,
             emissive_texture,
             unlit: material.unlit(),
             alpha_mode: alpha_mode(material),
             ..Default::default()
         }),
-    )
+    );
+    return MaterialType::StandardMaterial;
 }
 
 /// Loads a glTF node.
 fn load_node(
     gltf_node: &gltf::Node,
+    extended_root: &ExtendedRoot,
+    material_types: &[MaterialType],
     world_builder: &mut WorldChildBuilder,
     load_context: &mut LoadContext,
     node_index_to_entity_map: &mut HashMap<usize, Entity>,
@@ -584,7 +687,7 @@ fn load_node(
                 // added when iterating over all the gltf materials (since the default material is
                 // not explicitly listed in the gltf).
                 if !load_context.has_labeled_asset(&material_label) {
-                    load_material(&material, load_context);
+                    load_material(&material, None, load_context);
                 }
 
                 let primitive_label = primitive_label(&mesh, &primitive);
@@ -593,12 +696,25 @@ fn load_node(
                     AssetPath::new_ref(load_context.path(), Some(&primitive_label));
                 let material_asset_path =
                     AssetPath::new_ref(load_context.path(), Some(&material_label));
+                let mesh_handle = load_context.get_handle(mesh_asset_path);
 
-                let mut primitive_entity = parent.spawn(PbrBundle {
-                    mesh: load_context.get_handle(mesh_asset_path),
-                    material: load_context.get_handle(material_asset_path),
-                    ..Default::default()
-                });
+                let material_type = material.index()
+                    .map(|i| material_types[i])
+                    .unwrap_or(MaterialType::StandardMaterial);
+
+                let mut primitive_entity = match material_type {
+                    MaterialType::StandardMaterial => parent.spawn(PbrBundle {
+                        mesh: mesh_handle,
+                        material: load_context.get_handle(material_asset_path),
+                        ..Default::default()
+                    }),
+                    MaterialType::MToonMaterial => parent.spawn(MaterialMeshBundle {
+                        mesh: mesh_handle,
+                        material: load_context.get_handle::<_, MToonMaterial>(material_asset_path),
+                        ..Default::default()
+
+                    }),
+                };
                 let target_count = primitive.morph_targets().len();
                 if target_count != 0 {
                     let weights = match mesh.weights() {
@@ -630,6 +746,8 @@ fn load_node(
         for child in gltf_node.children() {
             if let Err(err) = load_node(
                 &child,
+                extended_root,
+                material_types,
                 parent,
                 load_context,
                 node_index_to_entity_map,
@@ -682,7 +800,11 @@ fn material_label(material: &gltf::Material) -> String {
 
 /// Returns the label for the `texture`.
 fn texture_label(texture: &gltf::Texture) -> String {
-    format!("Texture{}", texture.index())
+    texture_label_index(texture.index())
+}
+
+fn texture_label_index(index: usize) -> String {
+    format!("Texture{}", index)
 }
 
 /// Returns the label for the `scene`.
@@ -760,7 +882,7 @@ fn get_primitive_topology(mode: Mode) -> Result<PrimitiveTopology, VrmError> {
     }
 }
 
-fn alpha_mode(material: &Material) -> AlphaMode {
+fn alpha_mode(material: &gltf::Material) -> AlphaMode {
     match material.alpha_mode() {
         gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
         gltf::material::AlphaMode::Mask => AlphaMode::Mask(material.alpha_cutoff().unwrap_or(0.5)),

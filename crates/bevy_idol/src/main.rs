@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use std::fmt::Write;
+use std::time::Duration;
+use bevy::asset::ChangeWatcher;
 
 use bevy::core_pipeline::clear_color::ClearColorConfig;
 use bevy::input::mouse::MouseMotion;
@@ -40,9 +42,14 @@ struct Options {
     pub output_height: u32,
     #[arg(long)]
     pub extra_blend_shapes: Option<PathBuf>,
+    #[arg(long, default_value = "false")]
+    pub hot_reload: bool,
+    #[arg(long, default_value = "150")]
+    pub hot_reload_delay: u64,
 }
 
 fn main() -> anyhow::Result<()> {
+    let options = Options::parse();
     let mut app = App::new();
     app
         .add_plugins((
@@ -52,6 +59,14 @@ fn main() -> anyhow::Result<()> {
                         title: "Bevy Idol [Control]".into(),
                         ..default()
                     }),
+                    ..default()
+                })
+                .set(AssetPlugin {
+                    watch_for_changes: if options.hot_reload {
+                        ChangeWatcher::with_delay(Duration::from_millis(options.hot_reload_delay))
+                    } else {
+                        None
+                    },
                     ..default()
                 }),
             bevy_egui::EguiPlugin,
@@ -74,7 +89,6 @@ fn main() -> anyhow::Result<()> {
             dump_state,
         ))
         .add_systems(Startup, init);
-    let options = Options::parse();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

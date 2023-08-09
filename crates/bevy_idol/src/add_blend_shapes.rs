@@ -2,7 +2,6 @@ use bevy::asset::{Assets, Handle};
 use bevy::math::Vec3;
 use bevy::prelude::{Commands, Component, Entity, Image, Mesh, Query, Res, ResMut, With};
 use bevy::render::mesh::morph::{MorphAttributes, MorphTargetImage};
-use bevy::render::mesh::VertexAttributeValues;
 use serde::{Deserialize, Serialize};
 use bevy_vrm::Vrm;
 
@@ -88,7 +87,7 @@ pub fn apply_blend_shapes(
         };
         commands.entity(entity).remove::<AddBlendShapes>();
 
-        for (i, mesh) in vrm.meshes.iter().enumerate() {
+        for mesh in vrm.meshes.iter() {
             let Some(mesh) = meshes.get_mut(mesh) else {
                 continue;
             };

@@ -1210,6 +1210,7 @@ dependencies = [
  "base64 0.21.2",
  "bevy",
  "bevy_gltf",
+ "bitflags 2.3.3",
  "gltf",
  "percent-encoding",
  "serde",

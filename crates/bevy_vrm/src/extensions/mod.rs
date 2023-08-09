@@ -4,6 +4,7 @@ pub mod vrm;
 pub mod mtoon;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextureInfo {
     pub index: u32,
     #[serde(default)]
