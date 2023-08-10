@@ -7,10 +7,14 @@
 #import bevy_pbr::clustered_forward as clustering
 
 #import "shaders/mtoon/mtoon_functions.wgsl" as mtoon_functions
-#import "shaders/mtoon/mtoon_types.wgsl" as mtoon_types
+
+const luxToFlat = 0.05;
 
 struct ShadeInput {
-    material: mtoon_types::MToonMaterial,
+    base_color: vec3<f32>,
+    shade_color: vec3<f32>,
+    shade_shift: f32,
+    shade_toony: f32,
     frag_coord: vec4<f32>,
     world_position: vec4<f32>,
     world_normal: vec3<f32>,
@@ -22,6 +26,9 @@ struct ShadeInput {
 
 fn shade_input_new() -> ShadeInput {
     var shade_input: ShadeInput;
+
+    shade_input.base_color = vec3<f32>(1.0);
+    shade_input.shade_color = vec3<f32>(0.0);
 
     shade_input.frag_coord = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     shade_input.world_position = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -37,56 +44,67 @@ fn shade_input_new() -> ShadeInput {
     return shade_input;
 }
 
-fn getDistanceAttenuation(distanceSquare: f32, inverseRangeSquared: f32) -> f32 {
-    let factor = distanceSquare * inverseRangeSquared;
-    let smoothFactor = saturate(1.0 - factor * factor);
-    let attenuation = smoothFactor * smoothFactor;
-    return attenuation * 1.0 / max(distanceSquare, 0.0001);
+fn distance_attenuation(distance_square: f32, inverse_range_squared: f32) -> f32 {
+    let factor = distance_square * inverse_range_squared;
+    let smooth_factor = saturate(1.0 - factor * factor);
+    let attenuation = smooth_factor * smooth_factor;
+    return attenuation * 1.0 / max(distance_square, 0.0001);
 }
 
-fn point_light(world_position: vec3<f32>, light_id: u32, N: vec3<f32>) -> vec3<f32> {
+fn shade_light(in: ShadeInput, NoL: f32) -> f32 {
+    return smoothstep(in.shade_toony - 1.0, 1.0 - in.shade_toony, NoL + in.shade_shift);
+}
+
+fn light_contribution(in: ShadeInput, color: vec3<f32>, attenuation: f32, NoL: f32) -> vec3<f32> {
+    let shade = saturate(shade_light(in, NoL));
+    let shadow = 1.0; // TODO: implement additional light logic
+    return mix(in.shade_color, in.base_color, shade) * shadow * color * luxToFlat;
+}
+
+fn point_light(in: ShadeInput, light_id: u32, shadow: f32) -> vec3<f32> {
     let light = &view_bindings::point_lights.data[light_id];
-    let light_to_frag = (*light).position_radius.xyz - world_position.xyz;
+    let light_to_frag = (*light).position_radius.xyz - in.world_position.xyz;
     let distance_square = dot(light_to_frag, light_to_frag);
-    let rangeAttenuation = getDistanceAttenuation(distance_square, (*light).color_inverse_square_range.w);
+    let range_attenuation = distance_attenuation(distance_square, (*light).color_inverse_square_range.w);
 
     let L = normalize(light_to_frag);
-    let NoL = saturate(dot(N, L));
-    return NoL * rangeAttenuation * (*light).color_inverse_square_range.rgb;
+    let NoL = dot(in.N, L);
+    return light_contribution(in, (*light).color_inverse_square_range.rgb, range_attenuation * shadow, NoL);
 }
 
-fn spot_light(world_position: vec3<f32>, light_id: u32, N: vec3<f32>) -> vec3<f32> {
-    let point_light = point_light(world_position, light_id, N);
+fn spot_light(in: ShadeInput, light_id: u32, shadow: f32) -> vec3<f32> {
     let light = &view_bindings::point_lights.data[light_id];
+    let light_to_frag = (*light).position_radius.xyz - in.world_position.xyz;
+    let distance_square = dot(light_to_frag, light_to_frag);
+    let range_attenuation = distance_attenuation(distance_square, (*light).color_inverse_square_range.w);
+
+    let L = normalize(light_to_frag);
+    let NoL = dot(in.N, L);
 
     var spot_dir = vec3<f32>((*light).light_custom_data.x, 0.0, (*light).light_custom_data.y);
     spot_dir.y = sqrt(max(0.0, 1.0 - spot_dir.x * spot_dir.x - spot_dir.z * spot_dir.z));
     if ((*light).flags & mesh_view_types::POINT_LIGHT_FLAGS_SPOT_LIGHT_Y_NEGATIVE) != 0u {
         spot_dir.y = -spot_dir.y;
     }
-    let light_to_frag = (*light).position_radius.xyz - world_position.xyz;
 
     let cd = dot(-spot_dir, normalize(light_to_frag));
     let attenuation = saturate(cd * (*light).light_custom_data.z + (*light).light_custom_data.w);
     let spot_attenuation = attenuation * attenuation;
 
-    return point_light * spot_attenuation;
+    return light_contribution(in, (*light).color_inverse_square_range.rgb, range_attenuation * spot_attenuation * shadow, NoL);
 }
 
-fn directional_light(light_id: u32, N: vec3<f32>) -> vec3<f32> {
+fn directional_light(in: ShadeInput, light_id: u32, shadow: f32) -> vec3<f32> {
     let light = &view_bindings::lights.directional_lights[light_id];
     let L = (*light).direction_to_light.xyz;
-
-    let NoL = saturate(dot(N, L));
-    return NoL * (*light).color.rgb;
+    let NoL = dot(in.N, L);
+    return light_contribution(in, (*light).color.rgb, shadow, NoL);
 }
 
 fn shade(
     in: ShadeInput,
-) -> vec4<f32> {
-    var base_color: vec4<f32> = in.material.base_color;
-    let alpha = mtoon_functions::alpha_discard(in.material, base_color).a;
-    var output_color: vec4<f32> = vec4<f32>(0.0, 0.0, 0.0, alpha);
+) -> vec3<f32> {
+    var output_color = vec3<f32>(0.0);
 
     let view_z = dot(vec4<f32>(
         view_bindings::view.inverse_view[0].z,
@@ -105,8 +123,8 @@ fn shade(
                 && (view_bindings::point_lights.data[light_id].flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
             shadow = shadows::fetch_point_shadow(light_id, in.world_position, in.world_normal);
         }
-        let light_contrib = point_light(in.world_position.xyz, light_id, in.N);
-        output_color = max(output_color, vec4(light_contrib * shadow, 0.0));
+        let light_contrib = point_light(in, light_id, shadow);
+        output_color += light_contrib;
     }
 
     // Spot lights (direct)
@@ -118,8 +136,8 @@ fn shade(
                 && (view_bindings::point_lights.data[light_id].flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
             shadow = shadows::fetch_spot_shadow(light_id, in.world_position, in.world_normal);
         }
-        let light_contrib = spot_light(in.world_position.xyz, light_id, in.N);
-        output_color = max(output_color, vec4(light_contrib * shadow, 0.0));
+        let light_contrib = spot_light(in, light_id, shadow);
+        output_color += light_contrib;
     }
 
     // directional lights (direct)
@@ -130,14 +148,13 @@ fn shade(
                 && (view_bindings::lights.directional_lights[i].flags & mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
             shadow = shadows::fetch_directional_shadow(i, in.world_position, in.world_normal, view_z);
         }
-        var light_contrib = directional_light(i, in.N);
+        var light_contrib = directional_light(in, i, shadow);
 #ifdef DIRECTIONAL_LIGHT_SHADOW_MAP_DEBUG_CASCADES
         light_contrib = shadows::cascade_debug_visualization(light_contrib, i, view_z);
 #endif
-        output_color = max(output_color, vec4(light_contrib * shadow, 0.0));
+        output_color += light_contrib;
     }
 
-    output_color += vec4(in.material.emissive.rgb, 0.0);
-    output_color += vec4(view_bindings::lights.ambient_color.rgb, 0.0);
-    return saturate(output_color);
+    output_color += view_bindings::lights.ambient_color.rgb * in.base_color.rgb * luxToFlat;
+    return output_color;
 }

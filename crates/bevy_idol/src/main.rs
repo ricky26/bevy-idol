@@ -4,6 +4,7 @@ use std::time::Duration;
 use bevy::asset::ChangeWatcher;
 
 use bevy::core_pipeline::clear_color::ClearColorConfig;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::render::camera::RenderTarget;
@@ -161,7 +162,7 @@ fn init(
     options: Res<Options>,
 ) {
     commands.spawn(DirectionalLightBundle {
-        transform: Transform::from_xyz(10., 100., 0.)
+        transform: Transform::from_xyz(1., 10., -10.)
             .looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
@@ -172,6 +173,7 @@ fn init(
         Camera3dBundle {
             transform: Transform::from_xyz(0., 1., -2.)
                 .looking_at(Vec3::new(0., 1., 0.), Vec3::Y),
+            tonemapping: Tonemapping::None,
             ..default()
         },
         RenderLayers::from_layers(&[0, 1]),
@@ -230,6 +232,7 @@ fn init(
                 clear_color: ClearColorConfig::Custom(Color::NONE),
                 ..default()
             },
+            tonemapping: Tonemapping::None,
             ..default()
         },
         UiCameraConfig {

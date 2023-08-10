@@ -312,6 +312,10 @@ impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
             flags |= MToonMaterialFlags::EMISSIVE_TEXTURE;
         }
 
+        if self.normal_map_texture.is_some() {
+            flags |= MToonMaterialFlags::NORMAL_TEXTURE;
+        }
+
         if self.shade_color_texture.is_some() {
             flags |= MToonMaterialFlags::SHADE_COLOR_TEXTURE;
         }

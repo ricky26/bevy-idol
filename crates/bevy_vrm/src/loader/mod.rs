@@ -540,7 +540,7 @@ fn load_material(
             emissive,
             emissive_texture,
             normal_map_texture,
-            shade_color: Color::rgb(
+            shade_color: Color::rgb_linear(
                 mtoon.shade_color_factor.x,
                 mtoon.shade_color_factor.y,
                 mtoon.shade_color_factor.z,

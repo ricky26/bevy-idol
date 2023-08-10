@@ -23,10 +23,12 @@ fn fragment(
     in: MeshVertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> @location(0) vec4<f32> {
-    var base_color: vec4<f32> = mtoon_bindings::material.base_color;
-    var shade_color: vec4<f32> = mtoon_bindings::material.shade_color;
-    var shading_shift: f32 = mtoon_bindings::material.shading_shift_factor;
-    var shading_toony_factor: f32 = mtoon_bindings::material.shading_toony_factor;
+    var base_color = mtoon_bindings::material.base_color;
+    var shade_color = mtoon_bindings::material.shade_color;
+    var emissive = mtoon_bindings::material.emissive;
+    var shading_shift = mtoon_bindings::material.shading_shift_factor;
+    let shading_toony_factor = mtoon_bindings::material.shading_toony_factor;
+    var Nt = vec3(0.0, 0.0, 1.0);
 
     let is_orthographic = view.projection[3].w == 1.0;
     let V = pbr_functions::calculate_view(in.world_position, is_orthographic);
@@ -48,9 +50,20 @@ fn fragment(
     if ((mtoon_bindings::material.flags & mtoon_types::MTOON_FLAGS_SHADE_COLOR_TEXTURE_BIT) != 0u) {
         shade_color *= textureSampleBias(mtoon_bindings::shade_color_texture, mtoon_bindings::shade_color_sampler, uv, view.mip_bias);
     }
+    if ((mtoon_bindings::material.flags & mtoon_types::MTOON_FLAGS_EMISSIVE_TEXTURE_BIT) != 0u) {
+        emissive *= textureSampleBias(mtoon_bindings::emissive_texture, mtoon_bindings::emissive_sampler, uv, view.mip_bias);
+    }
+    if ((mtoon_bindings::material.flags & mtoon_types::MTOON_FLAGS_NORMAL_TEXTURE_BIT) != 0u) {
+        Nt = textureSampleBias(mtoon_bindings::normal_map_texture, mtoon_bindings::normal_map_sampler, uv, view.mip_bias).rgb;
+    }
 #endif
 
-    var shade_input: ShadeInput;
+    let alpha = mtoon_functions::alpha_discard(mtoon_bindings::material, base_color);
+    var shade_input = shade_input_new();
+    shade_input.base_color = base_color.rgb;
+    shade_input.shade_color = shade_color.rgb;
+    shade_input.shade_shift = shading_shift;
+    shade_input.shade_toony = shading_toony_factor;
     shade_input.flags = mesh[in.instance_index].flags;
     shade_input.V = V;
     shade_input.frag_coord = in.position;
@@ -69,22 +82,18 @@ fn fragment(
         mtoon_bindings::material.flags,
         shade_input.world_normal,
 #ifdef VERTEX_TANGENTS
-#ifdef STANDARDMATERIAL_NORMAL_MAP
         in.world_tangent,
-#endif
 #endif
 #ifdef VERTEX_UVS
         uv,
+        Nt,
 #endif
         view.mip_bias,
     );
 #endif
 
-    var shading: vec4<f32> = shade(shade_input);
-    shading += shading_shift;
-    shading = smoothstep(vec4(shading_toony_factor - 1.0), vec4(1.0 - shading_toony_factor), saturate(shading));
-
-    var output_color: vec4<f32> = mix(shade_color, base_color, shading);
+    var shading = shade(shade_input);
+    var output_color = vec4(shading + emissive.rgb, alpha);
 
     if (fog.mode != FOG_MODE_OFF && (mtoon_bindings::material.flags & mtoon_types::MTOON_FLAGS_FOG_ENABLED_BIT) != 0u) {
         output_color = pbr_functions::apply_fog(fog, output_color, in.world_position.xyz, view.world_position.xyz);
