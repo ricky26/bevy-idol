@@ -77,6 +77,7 @@ fn main() -> anyhow::Result<()> {
         ))
         .init_asset_loader::<debug_mesh::DebugMeshLoader>()
         .init_resource::<Faces>()
+        .insert_resource(Msaa::Sample2)
         .add_systems(Update, (
             api::update_api,
             update_face_mesh,
