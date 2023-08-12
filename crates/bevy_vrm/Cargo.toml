@@ -1,8 +1,10 @@
 [package]
 name = "bevy_vrm"
+description = "Bevy support for the VRM specification"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+license-file = "LICENSE"
 
 [dependencies]
 bevy = "0.11.0"
