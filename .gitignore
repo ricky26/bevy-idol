@@ -1,4 +1,5 @@
 /target
 /.idea
 /.config
+/crates/bevy_idol/assets/local
 vk_layer_settings.txt

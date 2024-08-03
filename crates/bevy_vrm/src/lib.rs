@@ -10,6 +10,7 @@ use bevy::utils::HashMap;
 
 pub use loader::{VrmError, VrmLoader};
 use crate::extensions::mtoon::MToonMaterial;
+use crate::extensions::vrm::{apply_look_at, Eye, Humanoid, Eyes, LookAtTarget};
 
 pub mod extensions;
 
@@ -63,7 +64,11 @@ impl Plugin for VrmPlugin {
                 supported_compressed_formats,
                 custom_vertex_attributes: Default::default(),
             })
-            .add_systems(Update, spawn_vrms)
+            .add_systems(Update, (spawn_vrms, apply_look_at))
+            .register_type::<Humanoid>()
+            .register_type::<Eye>()
+            .register_type::<Eyes>()
+            .register_type::<LookAtTarget>()
             .add_asset::<Vrm>();
     }
 

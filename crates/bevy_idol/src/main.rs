@@ -1,8 +1,8 @@
-use std::path::PathBuf;
 use std::fmt::Write;
+use std::path::PathBuf;
 use std::time::Duration;
-use bevy::asset::ChangeWatcher;
 
+use bevy::asset::ChangeWatcher;
 use bevy::core_pipeline::clear_color::ClearColorConfig;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::MouseMotion;
@@ -15,6 +15,7 @@ use bevy::render::view::RenderLayers;
 use bevy::window::{WindowRef, WindowResolution};
 use clap::Parser;
 
+use bevy_vrm::extensions::vrm::{Eyes, LookAtTarget};
 use bevy_vrm::VrmBundle;
 
 use crate::add_blend_shapes::{AddBlendShapes, apply_blend_shapes, BlendShapeLibrary};
@@ -47,6 +48,8 @@ struct Options {
     pub hot_reload: bool,
     #[arg(long, default_value = "150")]
     pub hot_reload_delay: u64,
+    #[arg(long, default_value = "avatars/demo.vrm")]
+    pub avatar: String,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -163,7 +166,7 @@ fn init(
     options: Res<Options>,
 ) {
     commands.spawn(DirectionalLightBundle {
-        transform: Transform::from_xyz(1., 10., -10.)
+        transform: Transform::from_xyz(1., 10., 10.)
             .looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
     });
@@ -172,7 +175,7 @@ fn init(
     commands.spawn((
         Name::from("Preview Camera"),
         Camera3dBundle {
-            transform: Transform::from_xyz(0., 1., -2.)
+            transform: Transform::from_xyz(0., 1., 5.)
                 .looking_at(Vec3::new(0., 1., 0.), Vec3::Y),
             tonemapping: Tonemapping::None,
             ..default()
@@ -195,8 +198,8 @@ fn init(
                 cull_mode: None,
                 ..default()
             }),
-            transform: Transform::default()
-                .with_scale(Vec3::ONE),
+            transform: Transform::from_xyz(0., 1., -4.8)
+                .with_scale(Vec3::ONE * 5.),
             visibility: Visibility::Hidden,
             ..default()
         },
@@ -223,8 +226,8 @@ fn init(
     commands.spawn((
         Name::from("Output Camera"),
         Camera3dBundle {
-            transform: Transform::from_xyz(0., 1.35, -1.)
-                .looking_at(Vec3::new(0., 1.35, 0.), Vec3::Y),
+            transform: Transform::from_xyz(0., 1.5, 1.)
+                .looking_at(Vec3::new(0., 1.5, 0.), Vec3::Y),
             camera: Camera {
                 target: RenderTarget::Window(WindowRef::Entity(output_window)),
                 ..default()
@@ -248,36 +251,21 @@ fn init(
         .spawn((
             Name::from("Debug Marker"),
             PbrBundle {
-                mesh: meshes.add(Mesh::from(shape::Cube {
-                    size: 1.0,
-                })),
+                mesh: assets.load("meshes/canonical_face_model.dobj"),
                 material: materials.add(StandardMaterial {
                     base_color: Color::rgb(1.0, 0.0, 1.0),
+                    double_sided: true,
+                    cull_mode: None,
                     ..default()
                 }),
+                transform: Transform::default()
+                    .with_scale(Vec3::ONE * 0.1),
                 visibility: Visibility::Hidden,
                 ..default()
             },
             FaceTransform,
             ToggleVisibilityKey(KeyCode::F9),
-        ))
-        .with_children(|parent| {
-            parent
-                .spawn((
-                    PbrBundle {
-                        transform: Transform::from_xyz(0., 0., -0.5),
-                        mesh: meshes.add(Mesh::try_from(shape::Icosphere {
-                            radius: 0.4,
-                            subdivisions: 16,
-                        }).unwrap()),
-                        material: materials.add(StandardMaterial {
-                            base_color: Color::rgb(1.0, 0.0, 1.0),
-                            ..default()
-                        }),
-                        ..default()
-                    },
-                ));
-        });
+        ));
 
     // Camera plane
     let mut camera_image = Image::default();
@@ -302,8 +290,9 @@ fn init(
                 subdivisions: 1,
             })),
             material: camera_material,
-            transform: Transform::from_xyz(0., 1., 2.)
-                .with_rotation(Quat::from_rotation_x(std::f32::consts::PI * -0.5)),
+            transform: Transform::from_xyz(0., 1., -5.)
+                .with_rotation(Quat::from_rotation_z(std::f32::consts::PI)
+                    * Quat::from_rotation_x(std::f32::consts::PI * 0.5)),
             visibility: Visibility::Hidden,
             ..default()
         },
@@ -337,9 +326,7 @@ fn init(
     let mut avatar = commands.spawn((
         Name::from("Avatar"),
         VrmBundle {
-            vrm: assets.load("avatars/demo.vrm"),
-            transform: Transform::default()
-                .looking_at(Vec3::Z, Vec3::Y),
+            vrm: assets.load(&options.avatar),
             ..default()
         },
     ));
@@ -383,10 +370,17 @@ fn update_face_mesh(
             _ => panic!("expected vertices to be f32x3"),
         };
 
+        let mut center = face.transform.translation / 8.;
+        center.z = 0.;
+
+        let rotation = face.transform.rotation.inverse();
+
         // Workaround the debug mesh missing the eyes.
         let num_landmarks = positions.len().min(face.landmarks.len());
         for (idx, landmark) in face.landmarks[..num_landmarks].iter().enumerate() {
-            positions[idx] = landmark.position.to_array();
+            let p = landmark.position;
+            let p = rotation * (p - center);
+            positions[idx] = p.to_array();
         }
     }
 }
@@ -400,7 +394,9 @@ fn update_face_transforms(
             continue;
         };
 
-        *transform = face.transform;
+        transform.translation = face.transform.translation + Vec3::Y;
+        transform.rotation = face.transform.rotation
+            * Quat::from_rotation_y(std::f32::consts::PI);
     }
 }
 
@@ -471,8 +467,8 @@ fn update_debug_text(
         if let Some(face) = faces.faces.get(0) {
             let transform = face.transform;
             let face_text = format!(
-                "face p={}\n  f={}\n  u={}\n  p1={}\n  p50={}\n  p150={}\n",
-                transform.translation, transform.forward(), transform.up(),
+                "face p={}\n  s={}\n  f={}\n  u={}\n  p1={}\n  p50={}\n  p150={}\n",
+                transform.translation, transform.scale, transform.forward(), transform.up(),
                 face.landmarks[0].position,
                 face.landmarks[49].position,
                 face.landmarks[149].position,
@@ -515,14 +511,42 @@ fn update_camera_plane(
 }
 
 fn update_morph_targets(
+    mut gizmos: Gizmos,
     faces: Res<Faces>,
     meshes: Res<Assets<Mesh>>,
     mut entities: Query<(&Handle<Mesh>, &mut MeshMorphWeights)>,
+    humanoids: Query<&Eyes>,
+    mut look_targets: Query<&mut Transform, With<LookAtTarget>>,
 ) {
     let Some(face) = faces.faces.get(0) else {
         return;
     };
     let blend_shapes = &face.blend_shapes;
+
+    let p = face.transform.translation + Vec3::Y;
+    let d = face.transform.translation.normalize();
+    let l = Vec3::Y + d * -5. / d.z;
+
+    let u = p + face.transform.up() * 0.1;
+    let f = p + face.transform.forward() * 0.1;
+    gizmos.line(p, u, Color::MAROON);
+    gizmos.line(p, f, Color::BEIGE);
+    gizmos.line(l, Vec3::Y, Color::BLUE);
+    // gizmos.line(p, l, Color::CYAN);
+
+    let mut color = Color::RED;
+    for landmarks in face.landmarks[468..].windows(2) {
+        let a = &landmarks[0];
+        let b = &landmarks[1];
+
+        // let p0 = q.transform_point(a.position);
+        // let p1 = q.transform_point(b.position);
+
+        // log::info!("axax {} / {} - {} {}", a.position, b.position, p0, p1);
+
+        // gizmos.line(p0, p1, color);
+        // color.set_r(color.r() - 0.1);
+    }
 
     for (mesh, mut weights) in &mut entities {
         let Some(mesh) = meshes.get(mesh) else {
@@ -537,6 +561,21 @@ fn update_morph_targets(
         for (name, weight) in names.iter().zip(weights.iter_mut()) {
             *weight = blend_shapes.get(name.as_str()).copied().unwrap_or(0.);
         }
+    }
+
+    // let look_target = Vec3::new(
+    //     face.blend_shapes.get("")
+    //     0.,
+    //     0.,
+    //     -10.,
+    // );
+
+    for look_at in &humanoids {
+        let Some(mut target) = look_targets.get_mut(look_at.target).ok() else {
+            continue;
+        };
+
+        // target.translation = Vec3::new(0., 0., -10.);
     }
 }
 
@@ -561,7 +600,6 @@ fn dump_state(
         for (shape, weight) in shapes {
             writeln!(&mut out, "  shape {shape} = {weight}").unwrap();
         }
-
     }
 
     std::fs::write("out.txt", out).unwrap();

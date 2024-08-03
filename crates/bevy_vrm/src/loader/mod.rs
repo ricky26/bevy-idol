@@ -9,7 +9,7 @@ use bevy::asset::{
 use bevy::core::Name;
 use bevy::hierarchy::{BuildWorldChildren, WorldChildBuilder};
 use bevy::log;
-use bevy::math::{Mat4, Vec3};
+use bevy::math::{Mat4, Quat, Vec3};
 use bevy::pbr::{AlphaMode, MaterialMeshBundle, PbrBundle, StandardMaterial};
 use bevy::prelude::{Camera3dBundle, Entity, World};
 use bevy::render::{
@@ -37,6 +37,7 @@ use vertex_attributes::*;
 
 use crate::extensions::{ExtendedMaterial, ExtendedRoot};
 use crate::extensions::mtoon::MToonMaterial;
+use crate::extensions::vrm::{Eye, Humanoid, HumanoidBone, Eyes, LookAtMode, LookAtTarget};
 use crate::Vrm;
 
 mod vertex_attributes;
@@ -48,6 +49,8 @@ pub enum VrmError {
     UnsupportedPrimitive { mode: Mode },
     #[error("invalid glTF file: {0}")]
     Gltf(#[from] gltf::Error),
+    #[error("missing bone: {0}")]
+    MissingBone(String),
     #[error("binary blob is missing")]
     MissingBlob,
     #[error("failed to decode base64 mesh data")]
@@ -126,7 +129,7 @@ async fn load_vrm<'a, 'b>(
     let buffer_data = load_buffers(&gltf, load_context, load_context.path()).await?;
     let vrm_root = serde_json::from_slice::<ExtendedRoot>(&glb.json)
         .map_err(gltf::Error::from)?;
-    // let vrm_metadata = &vrm_root.extensions.vrm;
+    let vrm_metadata = &vrm_root.extensions.vrm;
 
     let mut material_types = Vec::new();
     let mut linear_textures = HashSet::default();
@@ -319,7 +322,7 @@ async fn load_vrm<'a, 'b>(
         let mut node_index_to_entity_map = HashMap::new();
         let mut entity_to_skin_index_map = HashMap::new();
 
-        world
+        let root_entity = world
             .spawn(SpatialBundle::INHERITED_IDENTITY)
             .with_children(|parent| {
                 for node in scene.nodes() {
@@ -338,7 +341,8 @@ async fn load_vrm<'a, 'b>(
                         return;
                     }
                 }
-            });
+            })
+            .id();
         if let Some(Err(err)) = err {
             return Err(err);
         }
@@ -356,6 +360,58 @@ async fn load_vrm<'a, 'b>(
                 joints: joint_entities,
             });
         }
+
+        // Build humanoid component
+        let humanoid = &vrm_metadata.humanoid;
+        let mut bones = HashMap::with_capacity(humanoid.human_bones.len());
+        for (bone, json) in &humanoid.human_bones {
+            if let Some(entity) = node_index_to_entity_map.get(&(json.node as usize)) {
+                bones.insert(*bone, *entity);
+            } else {
+                log::warn!("Human bone {bone:?} references invalid node ID {}", json.node);
+            }
+        }
+
+        // Build look-at component
+        let look_at = &vrm_metadata.look_at;
+        let look_target = world.spawn((
+            Name::new("Look Target"),
+            SpatialBundle::from_transform(Transform::from_xyz(0., 0., -10.)),
+            LookAtTarget,
+        )).id();
+
+        let mut get_eye = |bone| bones.get(&bone)
+            .map(|e| world.entity_mut(*e)
+                .insert(Eye)
+                .get::<Transform>()
+                .unwrap()
+                .rotation)
+            .unwrap_or(Quat::IDENTITY);
+
+        let left_base_rotation = get_eye(HumanoidBone::LeftEye);
+        let right_base_rotation = get_eye(HumanoidBone::RightEye);
+
+        if let Some(entity) = bones.get(&HumanoidBone::Head).copied() {
+            world.entity_mut(entity)
+                .with_children(|parent| {
+                    parent.spawn(SpatialBundle::from_transform(
+                        Transform::from_translation(look_at.offset_from_head_bone)))
+                        .add_child(look_target);
+                });
+        }
+
+        if look_at.mode == LookAtMode::Expression {
+            log::warn!("expression look at unsupported");
+        }
+
+        world
+            .entity_mut(root_entity)
+            .insert(Name::new("Humanoid"))
+            .insert(Humanoid {
+                bones,
+            })
+            .insert(Eyes::from_json(
+                look_at, look_target, left_base_rotation, right_base_rotation));
 
         let scene_label = scene_label(&scene);
         let scene_handle = load_context.set_labeled_asset(
@@ -712,7 +768,6 @@ fn load_node(
                         mesh: mesh_handle,
                         material: load_context.get_handle::<_, MToonMaterial>(material_asset_path),
                         ..Default::default()
-
                     }),
                 };
                 let target_count = primitive.morph_targets().len();

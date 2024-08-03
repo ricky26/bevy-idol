@@ -4,6 +4,7 @@ use axum::{Json, Router};
 use axum::extract::{DefaultBodyLimit, State, TypedHeader};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::put;
+use bevy::math::Vec3;
 use bevy::prelude::{Assets, Image, Res, ResMut, Resource, StandardMaterial, Transform};
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bytes::Bytes;

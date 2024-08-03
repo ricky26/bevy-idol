@@ -64,7 +64,7 @@ fn fragment(
     shade_input.shade_color = shade_color.rgb;
     shade_input.shade_shift = shading_shift;
     shade_input.shade_toony = shading_toony_factor;
-    shade_input.flags = mesh[in.instance_index].flags;
+    shade_input.flags = mesh.flags;
     shade_input.V = V;
     shade_input.frag_coord = in.position;
     shade_input.world_position = in.world_position;
