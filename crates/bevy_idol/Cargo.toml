@@ -6,21 +6,23 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-bevy = "0.11.2"
+bevy = { workspace = true }
 bevy_vrm = { path = "../bevy_vrm" }
 idol_api = { path = "../idol_api" }
-bevy_obj = "0.11.0"
-v4l = "0.14.0"
-clap = { version = "4.3.19", features = ["derive"] }
-anyhow = "1.0.72"
-tracing-subscriber = "0.3.17"
-log = "0.4.19"
-parking_lot = "0.12.1"
-tokio = { version = "1.29.1", features = ["rt-multi-thread"] }
-axum = { version = "0.6.19", features = ["headers"] }
-bytes = "1.4.0"
-headers = "0.3.8"
-bevy_egui = "0.21.0"
-bevy-inspector-egui = "0.19.0"
-serde = { version = "1.0.178", features = ["derive"] }
-serde_json = "1.0.104"
+bevy_obj = { workspace = true }
+v4l = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+axum = { workspace = true }
+axum-extra = { workspace = true, features = ["typed-header"] }
+axum-server = { workspace = true }
+bytes = { workspace = true }
+headers = { workspace = true }
+bevy_egui = { workspace = true }
+bevy-inspector-egui = { workspace = true, features = ["bevy_render"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

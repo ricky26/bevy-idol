@@ -1,26 +1,27 @@
-#import bevy_pbr::pbr_functions as pbr_functions
-#import bevy_pbr::pbr_types as pbr_types
+#import bevy_render::maths::powsafe
+#import bevy_pbr::pbr_functions
+#import bevy_pbr::pbr_types
 #import bevy_pbr::prepass_utils
 
-#import bevy_pbr::mesh_vertex_output MeshVertexOutput
-#import bevy_pbr::mesh_bindings mesh
-#import bevy_pbr::mesh_view_bindings view, fog, screen_space_ambient_occlusion_texture
-#import bevy_pbr::mesh_view_types FOG_MODE_OFF
-#import bevy_core_pipeline::tonemapping screen_space_dither, powsafe, tone_mapping
-#import bevy_pbr::parallax_mapping parallaxed_uv
+#import bevy_pbr::forward_io::VertexOutput
+#import bevy_pbr::mesh_bindings::mesh
+#import bevy_pbr::mesh_view_bindings::{view, fog, screen_space_ambient_occlusion_texture}
+#import bevy_pbr::mesh_view_types::FOG_MODE_OFF
+#import bevy_core_pipeline::tonemapping::{screen_space_dither, tone_mapping}
+#import bevy_pbr::parallax_mapping::parallaxed_uv
 
 #ifdef SCREEN_SPACE_AMBIENT_OCCLUSION
-#import bevy_pbr::gtao_utils gtao_multibounce
+#import bevy_pbr::gtao_utils::gtao_multibounce
 #endif
 
 #import "shaders/mtoon/mtoon_types.wgsl" as mtoon_types
 #import "shaders/mtoon/mtoon_bindings.wgsl" as mtoon_bindings
 #import "shaders/mtoon/mtoon_functions.wgsl" as mtoon_functions
-#import "shaders/mtoon/mtoon_lighting.wgsl" ShadeInput, shade_input_new, shade
+#import "shaders/mtoon/mtoon_lighting.wgsl"::{ShadeInput, shade_input_new, shade}
 
 @fragment
 fn fragment(
-    in: MeshVertexOutput,
+    in: VertexOutput,
     @builtin(front_facing) is_front: bool,
 ) -> @location(0) vec4<f32> {
     var base_color = mtoon_bindings::material.base_color;
@@ -30,7 +31,7 @@ fn fragment(
     let shading_toony_factor = mtoon_bindings::material.shading_toony_factor;
     var Nt = vec3(0.0, 0.0, 1.0);
 
-    let is_orthographic = view.projection[3].w == 1.0;
+    let is_orthographic = view.clip_from_view[3].w == 1.0;
     let V = pbr_functions::calculate_view(in.world_position, is_orthographic);
 #ifdef VERTEX_UVS
     var uv = in.uv;
@@ -64,7 +65,7 @@ fn fragment(
     shade_input.shade_color = shade_color.rgb;
     shade_input.shade_shift = shading_shift;
     shade_input.shade_toony = shading_toony_factor;
-    shade_input.flags = mesh.flags;
+    shade_input.flags = mesh[in.instance_index].flags;
     shade_input.V = V;
     shade_input.frag_coord = in.position;
     shade_input.world_position = in.world_position;

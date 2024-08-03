@@ -1,5 +1,5 @@
 #import "shaders/mtoon/mtoon_types.wgsl" as mtoon_types
-#import "shaders/mtoon/mtoon_types.wgsl" MToonMaterial
+#import "shaders/mtoon/mtoon_types.wgsl"::MToonMaterial
 #import "shaders/mtoon/mtoon_bindings.wgsl" as mtoon_bindings
 
 fn alpha_discard(material: MToonMaterial, output_color: vec4<f32>) -> f32 {

@@ -5,8 +5,8 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-serde = { version = "1.0.177", features = ["derive"] }
-glam = "0.24.1"
-bytes = "1.4.0"
-nanoid = "0.4.0"
-axum = "0.6.19"
+serde = { workspace = true, features = ["derive"] }
+glam = { workspace = true }
+bytes = { workspace = true }
+nanoid = { workspace = true }
+axum = { workspace = true }

@@ -1,14 +1,13 @@
-//#import bevy_pbr::utils PI
 #import bevy_pbr::mesh_view_types as mesh_view_types
 #import bevy_pbr::mesh_view_bindings as view_bindings
-#import bevy_pbr::mesh_types MESH_FLAGS_SHADOW_RECEIVER_BIT
-#import bevy_pbr::mesh_bindings mesh
+#import bevy_pbr::mesh_types::MESH_FLAGS_SHADOW_RECEIVER_BIT
+#import bevy_pbr::mesh_bindings::mesh
 #import bevy_pbr::shadows as shadows
 #import bevy_pbr::clustered_forward as clustering
 
 #import "shaders/mtoon/mtoon_functions.wgsl" as mtoon_functions
 
-const luxToFlat = 0.05;
+const LUX_TO_FLAT = 0.0001;
 
 struct ShadeInput {
     base_color: vec3<f32>,
@@ -58,11 +57,11 @@ fn shade_light(in: ShadeInput, NoL: f32) -> f32 {
 fn light_contribution(in: ShadeInput, color: vec3<f32>, attenuation: f32, NoL: f32) -> vec3<f32> {
     let shade = saturate(shade_light(in, NoL));
     let shadow = 1.0; // TODO: implement additional light logic
-    return mix(in.shade_color, in.base_color, shade) * shadow * color * luxToFlat;
+    return mix(in.shade_color, in.base_color, shade) * shadow * color * LUX_TO_FLAT;
 }
 
 fn point_light(in: ShadeInput, light_id: u32, shadow: f32) -> vec3<f32> {
-    let light = &view_bindings::point_lights.data[light_id];
+    let light = &view_bindings::clusterable_objects.data[light_id];
     let light_to_frag = (*light).position_radius.xyz - in.world_position.xyz;
     let distance_square = dot(light_to_frag, light_to_frag);
     let range_attenuation = distance_attenuation(distance_square, (*light).color_inverse_square_range.w);
@@ -73,7 +72,7 @@ fn point_light(in: ShadeInput, light_id: u32, shadow: f32) -> vec3<f32> {
 }
 
 fn spot_light(in: ShadeInput, light_id: u32, shadow: f32) -> vec3<f32> {
-    let light = &view_bindings::point_lights.data[light_id];
+    let light = &view_bindings::clusterable_objects.data[light_id];
     let light_to_frag = (*light).position_radius.xyz - in.world_position.xyz;
     let distance_square = dot(light_to_frag, light_to_frag);
     let range_attenuation = distance_attenuation(distance_square, (*light).color_inverse_square_range.w);
@@ -107,20 +106,20 @@ fn shade(
     var output_color = vec3<f32>(0.0);
 
     let view_z = dot(vec4<f32>(
-        view_bindings::view.inverse_view[0].z,
-        view_bindings::view.inverse_view[1].z,
-        view_bindings::view.inverse_view[2].z,
-        view_bindings::view.inverse_view[3].z
+        view_bindings::view.view_from_world[0].z,
+        view_bindings::view.view_from_world[1].z,
+        view_bindings::view.view_from_world[2].z,
+        view_bindings::view.view_from_world[3].z
     ), in.world_position);
     let cluster_index = clustering::fragment_cluster_index(in.frag_coord.xy, view_z, in.is_orthographic);
     let offset_and_counts = clustering::unpack_offset_and_counts(cluster_index);
 
     // Point lights (direct)
     for (var i: u32 = offset_and_counts[0]; i < offset_and_counts[0] + offset_and_counts[1]; i = i + 1u) {
-        let light_id = clustering::get_light_id(i);
+        let light_id = clustering::get_clusterable_object_id(i);
         var shadow: f32 = 1.0;
         if ((in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
-                && (view_bindings::point_lights.data[light_id].flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
+                && (view_bindings::clusterable_objects.data[light_id].flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
             shadow = shadows::fetch_point_shadow(light_id, in.world_position, in.world_normal);
         }
         let light_contrib = point_light(in, light_id, shadow);
@@ -129,11 +128,10 @@ fn shade(
 
     // Spot lights (direct)
     for (var i: u32 = offset_and_counts[0] + offset_and_counts[1]; i < offset_and_counts[0] + offset_and_counts[1] + offset_and_counts[2]; i = i + 1u) {
-        let light_id = clustering::get_light_id(i);
-
+        let light_id = clustering::get_clusterable_object_id(i);
         var shadow: f32 = 1.0;
         if ((in.flags & MESH_FLAGS_SHADOW_RECEIVER_BIT) != 0u
-                && (view_bindings::point_lights.data[light_id].flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
+                && (view_bindings::clusterable_objects.data[light_id].flags & mesh_view_types::POINT_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u) {
             shadow = shadows::fetch_spot_shadow(light_id, in.world_position, in.world_normal);
         }
         let light_contrib = spot_light(in, light_id, shadow);
@@ -155,6 +153,6 @@ fn shade(
         output_color += light_contrib;
     }
 
-    output_color += view_bindings::lights.ambient_color.rgb * in.base_color.rgb * luxToFlat;
+    output_color += view_bindings::lights.ambient_color.rgb * in.base_color.rgb * LUX_TO_FLAT;
     return output_color;
 }

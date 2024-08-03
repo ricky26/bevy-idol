@@ -1,8 +1,8 @@
 use bevy::ecs::entity::{EntityMapper, MapEntities};
 use bevy::ecs::reflect::ReflectMapEntities;
-use bevy::math::{Quat, Vec2, vec2, Vec3, Vec4, vec4};
-use bevy::prelude::{Component, Entity, FromWorld, Query, ReflectComponent, Transform, With, Without, World};
-use bevy::reflect::{Reflect, TypeUuid};
+use bevy::math::{vec2, vec4};
+use bevy::prelude::*;
+use bevy::reflect::Reflect;
 use bevy::utils::HashMap;
 use serde::{Deserialize, Serialize};
 
@@ -104,7 +104,7 @@ pub struct RangeMapJson {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Reflect, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum LookAtMode {
+pub enum LookAtModeJson {
     Bone,
     Expression,
 }
@@ -113,7 +113,7 @@ pub enum LookAtMode {
 #[serde(rename_all = "camelCase")]
 pub struct LookAtJson {
     #[serde(rename = "type")]
-    pub mode: LookAtMode,
+    pub mode: LookAtModeJson,
     pub offset_from_head_bone: Vec3,
     pub range_map_horizontal_inner: RangeMapJson,
     pub range_map_horizontal_outer: RangeMapJson,
@@ -129,75 +129,49 @@ pub struct VrmExtensionJson {
     pub look_at: LookAtJson,
 }
 
-#[derive(Debug, Clone, Default, Reflect, Component, TypeUuid)]
+#[derive(Debug, Clone, Default, Reflect, Component)]
 #[reflect(Debug, Component, MapEntities)]
-#[uuid = "04dbd854-742e-4309-91f9-b6b963e4c438"]
 pub struct Humanoid {
     pub bones: HashMap<HumanoidBone, Entity>,
 }
 
 impl MapEntities for Humanoid {
-    fn map_entities(&mut self, entity_mapper: &mut EntityMapper) {
+    fn map_entities<M: EntityMapper>(&mut self, entity_mapper: &mut M) {
         for entity in self.bones.values_mut() {
-            *entity = entity_mapper.get_or_reserve(*entity);
+            *entity = entity_mapper.map_entity(*entity);
         }
     }
 }
 
-#[derive(Debug, Clone, Default, Reflect, Component, TypeUuid)]
+#[derive(Debug, Clone, Copy, Default, Reflect, Component)]
 #[reflect(Debug, Component)]
-#[uuid = "43d4202d-692f-4413-8051-30ecb3f9fac2"]
 pub struct Eye;
 
-#[derive(Debug, Clone, Default, Reflect, Component, TypeUuid)]
+#[derive(Debug, Clone, Copy, Reflect, Component)]
 #[reflect(Debug, Component)]
-#[uuid = "c8cd7bd2-7843-41cd-8774-164137508100"]
-pub enum LookAt {
-    Entity(Entity),
-    Fixed { left: Vec2, right: Vec2 },
-}
-
-#[derive(Debug, Clone, Reflect, Component, TypeUuid)]
-#[reflect(Debug, Component, MapEntities)]
-#[uuid = "9891590c-8b98-4434-91b7-a9a6fc2e848f"]
-pub struct Eyes {
-    pub mode: LookAtMode,
+pub struct LookAtRangeMap {
     pub input_scale: Vec4,
     pub output_scale: Vec4,
-    pub left_base_rotation: Quat,
-    pub right_base_rotation: Quat,
 }
 
-impl Eyes {
-    pub fn from_json(
-        json: &LookAtJson, target: Entity,
-        left_base_rotation: Quat,
-        right_base_rotation: Quat,
-    ) -> Self {
-        let input_scale = vec4(
-            json.range_map_horizontal_inner.input_max_value,
-            json.range_map_horizontal_outer.input_max_value,
-            json.range_map_vertical_down.input_max_value,
-            json.range_map_vertical_up.input_max_value,
-        );
-        let output_scale = vec4(
-            json.range_map_horizontal_inner.output_scale,
-            json.range_map_horizontal_outer.output_scale,
-            json.range_map_vertical_down.output_scale,
-            json.range_map_vertical_up.output_scale,
-        ) / input_scale;
+impl Default for LookAtRangeMap {
+    fn default() -> Self {
+        LookAtRangeMap {
+            input_scale: Vec4::splat(1.),
+            output_scale: Vec4::splat(1.),
+        }
+    }
+}
 
-        Self {
-            mode: json.mode,
-            target,
-            input_scale,
-            output_scale,
-            left_base_rotation,
-            right_base_rotation,
+impl LookAtRangeMap {
+    pub fn flipped(&self) -> LookAtRangeMap {
+        LookAtRangeMap {
+            input_scale: self.input_scale.yxzw(),
+            output_scale: self.output_scale.yxzw(),
         }
     }
 
-    pub fn evaluate_one(&self, target: Vec3) -> Vec2 {
+    pub fn evaluate(&self, target: Vec3) -> Vec2 {
         let (outer, inner) = if target.x < 0. {
             ((-target.x / target.z).atan(), 0.)
         } else {
@@ -215,60 +189,124 @@ impl Eyes {
         vec2(result.x - result.y, result.z - result.w)
     }
 
-    pub fn evaluate(&self, target: Vec3) -> (Vec2, Vec2) {
-        let left = self.evaluate_one(target);
-        let right = self.evaluate_one(target * Vec3::new(-1., 1., 1.))
+    pub fn evaluate_both(&self, target: Vec3) -> (Vec2, Vec2) {
+        let left = self.evaluate(target);
+        let right = self.evaluate(target * Vec3::new(-1., 1., 1.))
             * Vec2::new(-1., 1.);
         (left, right)
     }
 }
 
-impl MapEntities for Eyes {
-    fn map_entities(&mut self, entity_mapper: &mut EntityMapper) {
-        self.target = entity_mapper.get_or_reserve(self.target);
-    }
-}
-
-impl FromWorld for Eyes {
-    fn from_world(_world: &mut World) -> Self {
-        Eyes {
-            mode: LookAtMode::Bone,
-            input_scale: Default::default(),
-            output_scale: Default::default(),
-            left_base_rotation: Default::default(),
-            right_base_rotation: Default::default(),
+impl From<&LookAtJson> for LookAtRangeMap {
+    fn from(json: &LookAtJson) -> Self {
+        let input_scale = vec4(
+            json.range_map_horizontal_inner.input_max_value,
+            json.range_map_horizontal_outer.input_max_value,
+            json.range_map_vertical_down.input_max_value,
+            json.range_map_vertical_up.input_max_value,
+        );
+        let output_scale = vec4(
+            json.range_map_horizontal_inner.output_scale,
+            json.range_map_horizontal_outer.output_scale,
+            json.range_map_vertical_down.output_scale,
+            json.range_map_vertical_up.output_scale,
+        ) / input_scale;
+        Self {
+            input_scale,
+            output_scale,
         }
     }
 }
 
-pub fn apply_look_at(
-    humanoids: Query<(&Eyes, &Humanoid)>,
-    targets: Query<&Transform, (With<Eyes>, Without<Eye>)>,
-    mut eyes: Query<&mut Transform, (With<Eye>, Without<Eyes>)>,
+#[derive(Debug, Clone, Reflect, Component)]
+#[reflect(Debug, Component, MapEntities)]
+pub struct LookAtTarget(pub Entity);
+
+impl FromWorld for LookAtTarget {
+    fn from_world(_world: &mut World) -> Self {
+        LookAtTarget(Entity::PLACEHOLDER)
+    }
+}
+
+impl MapEntities for LookAtTarget {
+    fn map_entities<M: EntityMapper>(&mut self, entity_mapper: &mut M) {
+        self.0 = entity_mapper.map_entity(self.0);
+    }
+}
+
+#[derive(Debug, Clone, Reflect, Component)]
+#[reflect(Debug, Component)]
+pub struct TransformLookAt {
+    pub offset: Quat,
+}
+
+#[derive(Debug, Clone, Reflect, Component)]
+#[reflect(Debug, Component)]
+pub struct MorphTargetLookAt {
+    pub up_morph: Option<usize>,
+    pub down_morph: Option<usize>,
+    pub left_morph: Option<usize>,
+    pub right_morph: Option<usize>,
+}
+
+pub fn apply_transform_look_at(
+    mut set: ParamSet<(
+        (
+            Query<(
+                &LookAtTarget,
+                Option<&Parent>,
+            )>,
+            Query<&GlobalTransform>,
+        ),
+        Query<(
+            &TransformLookAt,
+            &mut Transform,
+            &mut GlobalTransform,
+            &LookAtRangeMap,
+        )>,
+    )>,
+    mut scratch_targets: Local<Vec<Option<(GlobalTransform, Vec3)>>>,
 ) {
-    for (look_at, humanoid) in &humanoids {
-        let Some(target) = targets.get(look_at.target)
-            .ok()
-            .map(|t| t.translation) else {
+    let (query, global_transforms) = set.p0();
+    for (target, parent) in &query {
+        let parent_transform = if let Some(parent) = parent {
+            if let Ok(transform) = global_transforms.get(parent.get()) {
+                Some(transform.clone())
+            } else {
+                None
+            }
+        } else {
+            Some(GlobalTransform::default())
+        };
+        let target = if let Ok(transform) = global_transforms.get(target.0) {
+            Some(transform.translation())
+        } else {
+            None
+        };
+        let state = if let (Some(transform), Some(target)) = (parent_transform, target) {
+            Some((transform, target))
+        } else {
+            None
+        };
+        scratch_targets.push(state)
+    }
+
+    for ((
+        look_at,
+        mut local_transform,
+        mut global_transform,
+        range_map,
+    ), state) in set.p1().iter_mut().zip(scratch_targets.drain(..)) {
+        let Some((parent_transform, target_pos)) = state else {
             continue;
         };
-        let (left, right) = look_at.evaluate(target);
 
-        let mut update_eye = |bone, rotation: Vec2, base: Quat|
-            if let Some(mut transform) = humanoid.bones
-                .get(&bone)
-                .and_then(|b| eyes.get_mut(*b).ok()) {
-                transform.rotation = Quat::from_rotation_y(rotation.x)
-                    * Quat::from_rotation_x(rotation.y)
-                    * base;
-            };
-
-        match look_at.mode {
-            LookAtMode::Bone => {
-                update_eye(HumanoidBone::LeftEye, left, look_at.left_base_rotation);
-                update_eye(HumanoidBone::RightEye, right, look_at.right_base_rotation);
-            }
-            LookAtMode::Expression => {}
-        }
+        let local_target = global_transform.affine().inverse().transform_point3(target_pos);
+        let rotation2 = range_map.evaluate(local_target);
+        let rotation = Quat::from_rotation_y(rotation2.x)
+            * Quat::from_rotation_x(rotation2.y)
+            * look_at.offset;
+        local_transform.rotation = rotation;
+        *global_transform = parent_transform * *local_transform;
     }
 }

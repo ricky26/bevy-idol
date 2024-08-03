@@ -6,13 +6,13 @@ edition = "2021"
 license-file = "LICENSE"
 
 [dependencies]
-bevy = "0.11.2"
-anyhow = "1.0.72"
-gltf = "1.2.0"
-bevy_gltf = "0.11.2"
-serde = "1.0.178"
-thiserror = "1.0.44"
-base64 = "0.21.2"
-serde_json = "1.0.104"
-percent-encoding = "2.3.0"
-bitflags = "2.3.3"
+bevy = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+gltf = { workspace = true }
+bevy_gltf = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+percent-encoding = { workspace = true }
+bitflags = { workspace = true }

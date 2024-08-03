@@ -1,21 +1,20 @@
 use std::fmt::Write;
 use std::path::PathBuf;
-use std::time::Duration;
 
-use bevy::asset::ChangeWatcher;
-use bevy::core_pipeline::clear_color::ClearColorConfig;
+use bevy::color::palettes::css::{BEIGE, BLUE, MAROON, RED};
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
-use bevy::render::camera::RenderTarget;
+use bevy::render::camera::{CameraOutputMode, RenderTarget};
 use bevy::render::mesh::morph::MeshMorphWeights;
 use bevy::render::mesh::VertexAttributeValues;
 use bevy::render::render_resource::Face;
 use bevy::render::view::RenderLayers;
 use bevy::window::{WindowRef, WindowResolution};
+use bevy_inspector_egui::inspector_egui_impls::InspectorEguiImpl;
 use clap::Parser;
 
-use bevy_vrm::extensions::vrm::{Eyes, LookAtTarget};
+use bevy_vrm::extensions::vrm::LookAtTarget;
 use bevy_vrm::VrmBundle;
 
 use crate::add_blend_shapes::{AddBlendShapes, apply_blend_shapes, BlendShapeLibrary};
@@ -44,12 +43,20 @@ struct Options {
     pub output_height: u32,
     #[arg(long)]
     pub extra_blend_shapes: Option<PathBuf>,
-    #[arg(long, default_value = "false")]
-    pub hot_reload: bool,
     #[arg(long, default_value = "150")]
     pub hot_reload_delay: u64,
     #[arg(long, default_value = "avatars/demo.vrm")]
     pub avatar: String,
+}
+
+struct InspectorExtrasPlugin;
+
+impl Plugin for InspectorExtrasPlugin {
+    fn build(&self, app: &mut App) {
+        let registry = app.world_mut().resource_mut::<AppTypeRegistry>();
+        let mut registry = registry.write();
+        registry.register_type_data::<Handle<Image>, InspectorEguiImpl>();
+    }
 }
 
 fn main() -> anyhow::Result<()> {
@@ -64,17 +71,10 @@ fn main() -> anyhow::Result<()> {
                         ..default()
                     }),
                     ..default()
-                })
-                .set(AssetPlugin {
-                    watch_for_changes: if options.hot_reload {
-                        ChangeWatcher::with_delay(Duration::from_millis(options.hot_reload_delay))
-                    } else {
-                        None
-                    },
-                    ..default()
                 }),
             bevy_egui::EguiPlugin,
             bevy_inspector_egui::quick::WorldInspectorPlugin::default(),
+            InspectorExtrasPlugin,
             bevy_obj::ObjPlugin,
             bevy_vrm::VrmPlugin,
         ))
@@ -102,7 +102,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(path) = options.extra_blend_shapes.as_ref() {
         let contents = std::fs::read(path)?;
         let library = BlendShapeLibrary::from_slice(&contents)?;
-        log::info!("loaded {} extra blend shapes", library.blend_shapes.len());
+        info!("loaded {} extra blend shapes", library.blend_shapes.len());
         app.insert_resource(ExtraBlendShapesLibrary {
             library,
         });
@@ -111,9 +111,9 @@ fn main() -> anyhow::Result<()> {
     let api_addr = options.api_bind.parse()?;
     let (api_state, api_resource) = api::ApiState::new();
     runtime.spawn(async move {
-        if let Err(err) = axum::Server::bind(&api_addr)
+        if let Err(err) = axum_server::Server::bind(api_addr)
             .serve(api::new_api().with_state(api_state).into_make_service()).await {
-            log::error!("failed to serve API: {}", err);
+            error!("failed to serve API: {}", err);
         }
     });
 
@@ -230,17 +230,14 @@ fn init(
                 .looking_at(Vec3::new(0., 1.5, 0.), Vec3::Y),
             camera: Camera {
                 target: RenderTarget::Window(WindowRef::Entity(output_window)),
-                ..default()
-            },
-            camera_3d: Camera3d {
-                clear_color: ClearColorConfig::Custom(Color::NONE),
+                output_mode: CameraOutputMode::Write {
+                    blend_state: None,
+                    clear_color: Color::NONE.into(),
+                },
                 ..default()
             },
             tonemapping: Tonemapping::None,
             ..default()
-        },
-        UiCameraConfig {
-            show_ui: false,
         },
         RenderLayers::from_layers(&[0, 2]),
         OutputCamera,
@@ -253,7 +250,7 @@ fn init(
             PbrBundle {
                 mesh: assets.load("meshes/canonical_face_model.dobj"),
                 material: materials.add(StandardMaterial {
-                    base_color: Color::rgb(1.0, 0.0, 1.0),
+                    base_color: Color::linear_rgb(1.0, 0.0, 1.0),
                     double_sided: true,
                     cull_mode: None,
                     ..default()
@@ -285,9 +282,9 @@ fn init(
     commands.spawn((
         Name::from("Camera Plane"),
         PbrBundle {
-            mesh: meshes.add(Mesh::from(shape::Plane {
-                size: 5.,
-                subdivisions: 1,
+            mesh: meshes.add(Mesh::from(Plane3d {
+                normal: Dir3::NEG_Y,
+                half_size: Vec2::splat(5.),
             })),
             material: camera_material,
             transform: Transform::from_xyz(0., 1., -5.)
@@ -350,17 +347,17 @@ fn update_face_mesh(
             continue;
         }
 
-        if !meshes.contains(&mesh) {
+        if !meshes.contains(&*mesh) {
             continue;
         }
 
         if need_to_copy.is_some() {
-            let new_mesh = meshes.get(&mesh).unwrap().clone();
+            let new_mesh = meshes.get(&*mesh).unwrap().clone();
             *mesh = meshes.add(new_mesh);
             commands.entity(entity).remove::<NeedToCopyMesh>();
         }
 
-        let mesh = meshes.get_mut(&mesh).unwrap();
+        let mesh = meshes.get_mut(&*mesh).unwrap();
         let face = &faces.faces[0];
         let Some(positions) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) else {
             continue;
@@ -402,28 +399,28 @@ fn update_face_transforms(
 
 fn update_free_look(
     time: Res<Time>,
-    keys: Res<Input<KeyCode>>,
-    mouse_buttons: Res<Input<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut mouse_motion: EventReader<MouseMotion>,
     mut entities: Query<(&mut Transform, &FreeLook)>,
 ) {
     let mut translate = Vec3::ZERO;
-    if keys.pressed(KeyCode::W) {
+    if keys.pressed(KeyCode::KeyW) {
         translate -= Vec3::Z;
     }
-    if keys.pressed(KeyCode::S) {
+    if keys.pressed(KeyCode::KeyS) {
         translate += Vec3::Z;
     }
-    if keys.pressed(KeyCode::A) {
+    if keys.pressed(KeyCode::KeyA) {
         translate -= Vec3::X;
     }
-    if keys.pressed(KeyCode::D) {
+    if keys.pressed(KeyCode::KeyD) {
         translate += Vec3::X;
     }
-    if keys.pressed(KeyCode::Q) {
+    if keys.pressed(KeyCode::KeyQ) {
         translate -= Vec3::Y;
     }
-    if keys.pressed(KeyCode::E) {
+    if keys.pressed(KeyCode::KeyE) {
         translate += Vec3::Y;
     }
     translate *= time.delta_seconds();
@@ -431,7 +428,7 @@ fn update_free_look(
     let mut rotate = Vec2::ZERO;
 
     if mouse_buttons.pressed(MouseButton::Left) {
-        for motion in &mut mouse_motion {
+        for motion in mouse_motion.read() {
             rotate += motion.delta;
         }
     }
@@ -445,7 +442,7 @@ fn update_free_look(
 }
 
 fn toggle_visibility(
-    keys: Res<Input<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut query: Query<(&mut Visibility, &ToggleVisibilityKey)>,
 ) {
     for (mut visibility, toggle) in &mut query {
@@ -467,7 +464,7 @@ fn update_debug_text(
         if let Some(face) = faces.faces.get(0) {
             let transform = face.transform;
             let face_text = format!(
-                "face p={}\n  s={}\n  f={}\n  u={}\n  p1={}\n  p50={}\n  p150={}\n",
+                "face p={}\n  s={}\n  f={:?}\n  u={:?}\n  p1={}\n  p50={}\n  p150={}\n",
                 transform.translation, transform.scale, transform.forward(), transform.up(),
                 face.landmarks[0].position,
                 face.landmarks[49].position,
@@ -481,7 +478,7 @@ fn update_debug_text(
 
         if let Some(transform) = preview_camera.iter().next() {
             text.sections[1].value = format!(
-                "camera p={}\n  f={}\n  u={}\n",
+                "camera p={}\n  f={:?}\n  u={:?}\n",
                 transform.translation, transform.forward(), transform.up());
         }
     }
@@ -515,7 +512,7 @@ fn update_morph_targets(
     faces: Res<Faces>,
     meshes: Res<Assets<Mesh>>,
     mut entities: Query<(&Handle<Mesh>, &mut MeshMorphWeights)>,
-    humanoids: Query<&Eyes>,
+    // humanoids: Query<&Eyes>,
     mut look_targets: Query<&mut Transform, With<LookAtTarget>>,
 ) {
     let Some(face) = faces.faces.get(0) else {
@@ -529,12 +526,12 @@ fn update_morph_targets(
 
     let u = p + face.transform.up() * 0.1;
     let f = p + face.transform.forward() * 0.1;
-    gizmos.line(p, u, Color::MAROON);
-    gizmos.line(p, f, Color::BEIGE);
-    gizmos.line(l, Vec3::Y, Color::BLUE);
+    gizmos.line(p, u, MAROON);
+    gizmos.line(p, f, BEIGE);
+    gizmos.line(l, Vec3::Y, BLUE);
     // gizmos.line(p, l, Color::CYAN);
 
-    let mut color = Color::RED;
+    let mut color = RED;
     for landmarks in face.landmarks[468..].windows(2) {
         let a = &landmarks[0];
         let b = &landmarks[1];
@@ -570,17 +567,17 @@ fn update_morph_targets(
     //     -10.,
     // );
 
-    for look_at in &humanoids {
-        let Some(mut target) = look_targets.get_mut(look_at.target).ok() else {
-            continue;
-        };
+    // for look_at in &humanoids {
+    //     let Some(mut target) = look_targets.get_mut(look_at.target).ok() else {
+    //         continue;
+    //     };
 
-        // target.translation = Vec3::new(0., 0., -10.);
-    }
+    // target.translation = Vec3::new(0., 0., -10.);
+    // }
 }
 
 fn dump_state(
-    keys: Res<Input<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     faces: Res<Faces>,
 ) {
     if !keys.just_pressed(KeyCode::F11) {

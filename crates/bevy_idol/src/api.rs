@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use axum::{Json, Router};
-use axum::extract::{DefaultBodyLimit, State, TypedHeader};
+use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::put;
-use bevy::math::Vec3;
+use axum_extra::TypedHeader;
 use bevy::prelude::{Assets, Image, Res, ResMut, Resource, StandardMaterial, Transform};
+use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bytes::Bytes;
 use headers::ContentLength;
@@ -110,8 +111,8 @@ pub fn update_api(
                     height: request.height,
                     depth_or_array_layers: 1,
                 };
-                let image = Image::new(size, TextureDimension::D2, request.payload.to_vec(), TextureFormat::Rgba8UnormSrgb);
-                let _ = images.set(&webcam.image, image.clone());
+                let image = Image::new(size, TextureDimension::D2, request.payload.to_vec(), TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::RENDER_WORLD);
+                let _ = images.insert(&webcam.image, image.clone());
                 materials.get_mut(&webcam.material);
             }
         }

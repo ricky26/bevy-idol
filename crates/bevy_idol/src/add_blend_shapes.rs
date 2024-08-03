@@ -2,6 +2,7 @@ use bevy::asset::{Assets, Handle};
 use bevy::math::Vec3;
 use bevy::prelude::{Commands, Component, Entity, Image, Mesh, Query, Res, ResMut, With};
 use bevy::render::mesh::morph::{MorphAttributes, MorphTargetImage};
+use bevy::render::render_asset::RenderAssetUsages;
 use serde::{Deserialize, Serialize};
 use bevy_vrm::Vrm;
 
@@ -114,8 +115,8 @@ pub fn apply_blend_shapes(
                 morph_targets.push(elements.into_iter());
             }
 
-            log::info!("Adding morph targets: {:?}", &morph_target_names);
-            let morph_image = MorphTargetImage::new(morph_targets.into_iter(), vertex_count)
+            tracing::info!("Adding morph targets: {:?}", &morph_target_names);
+            let morph_image = MorphTargetImage::new(morph_targets.into_iter(), vertex_count, RenderAssetUsages::RENDER_WORLD)
                 .expect("failed to create morph target image");
             mesh.set_morph_targets(images.add(morph_image.0));
             mesh.set_morph_target_names(morph_target_names);

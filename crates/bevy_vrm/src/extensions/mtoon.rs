@@ -1,11 +1,12 @@
-use bevy::asset::Handle;
+use bevy::asset::{Asset, Handle, ReflectAsset};
 use bevy::math::{Vec3, Vec4};
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
-use bevy::prelude::{AlphaMode, Color, Image, ReflectDefault};
-use bevy::reflect::{Reflect, TypeUuid};
-use bevy::render::mesh::MeshVertexBufferLayout;
+use bevy::prelude::*;
+use bevy::reflect::Reflect;
+use bevy::render::mesh::MeshVertexBufferLayoutRef;
 use bevy::render::render_asset::RenderAssets;
 use bevy::render::render_resource::{AsBindGroup, AsBindGroupShaderType, Face, RenderPipelineDescriptor, ShaderRef, ShaderType, SpecializedMeshPipelineError, TextureFormat};
+use bevy::render::texture::GpuImage;
 use serde::{Deserialize, Serialize};
 
 use crate::extensions::TextureInfo;
@@ -100,11 +101,10 @@ impl Default for MToonExtensionJson {
     }
 }
 
-#[derive(AsBindGroup, TypeUuid, Debug, Clone, Reflect)]
-#[uuid = "39201294-87dc-4b8d-b300-967bdc96cd92"]
+#[derive(Clone, Debug, Reflect, Asset, AsBindGroup)]
 #[bind_group_data(MToonMaterialKey)]
 #[uniform(0, MToonMaterialUniform)]
-#[reflect(Debug, Default)]
+#[reflect(Debug, Default, Asset)]
 pub struct MToonMaterial {
     pub alpha_mode: AlphaMode,
     pub double_sided: bool,
@@ -113,15 +113,15 @@ pub struct MToonMaterial {
     pub cull_mode: Option<Face>,
     pub transparent_with_z_write: bool,
     pub depth_bias: i32,
-    pub base_color: Color,
+    pub base_color: LinearRgba,
     #[texture(1)]
     #[sampler(2)]
     pub base_color_texture: Option<Handle<Image>>,
-    pub emissive: Color,
+    pub emissive: LinearRgba,
     #[texture(3)]
     #[sampler(4)]
     pub emissive_texture: Option<Handle<Image>>,
-    pub shade_color: Color,
+    pub shade_color: LinearRgba,
     #[texture(5)]
     #[sampler(6)]
     pub shade_color_texture: Option<Handle<Image>>,
@@ -170,11 +170,11 @@ impl Default for MToonMaterial {
             fog_enabled: true,
             transparent_with_z_write: false,
             depth_bias: 0,
-            base_color: Color::WHITE,
+            base_color: Color::WHITE.into(),
             base_color_texture: None,
-            emissive: Color::NONE,
+            emissive: Color::NONE.into(),
             emissive_texture: None,
-            shade_color: Color::BLACK,
+            shade_color: Color::BLACK.into(),
             shade_color_texture: None,
             shading_shift_factor: 0.0,
             shading_shift_scale: 1.0,
@@ -220,7 +220,7 @@ impl Material for MToonMaterial {
     fn specialize(
         _pipeline: &MaterialPipeline<Self>,
         descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayout,
+        _layout: &MeshVertexBufferLayoutRef,
         key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = key.bind_group_data.cull_mode;
@@ -259,13 +259,14 @@ bitflags::bitflags! {
         const UV_ANIM_MASK_TEXTURE       = (1 << 8);
         const DOUBLE_SIDED               = (1 << 9);
         const FOG_ENABLED                = (1 << 10);
-        const ALPHA_MODE_RESERVED_BITS   = (Self::ALPHA_MODE_MASK_BITS << Self::ALPHA_MODE_SHIFT_BITS); // ← Bitmask reserving bits for the `AlphaMode`
-        const ALPHA_MODE_OPAQUE          = (0 << Self::ALPHA_MODE_SHIFT_BITS);                          // ← Values are just sequential values bitshifted into
-        const ALPHA_MODE_MASK            = (1 << Self::ALPHA_MODE_SHIFT_BITS);                          //   the bitmask, and can range from 0 to 7.
-        const ALPHA_MODE_BLEND           = (2 << Self::ALPHA_MODE_SHIFT_BITS);                          //
-        const ALPHA_MODE_PREMULTIPLIED   = (3 << Self::ALPHA_MODE_SHIFT_BITS);                          //
-        const ALPHA_MODE_ADD             = (4 << Self::ALPHA_MODE_SHIFT_BITS);                          //   Right now only values 0–5 are used, which still gives
-        const ALPHA_MODE_MULTIPLY        = (5 << Self::ALPHA_MODE_SHIFT_BITS);                          // ← us "room" for two more modes without adding more bits
+        const ALPHA_MODE_RESERVED_BITS   = (Self::ALPHA_MODE_MASK_BITS << Self::ALPHA_MODE_SHIFT_BITS);
+        const ALPHA_MODE_OPAQUE          = (0 << Self::ALPHA_MODE_SHIFT_BITS);
+        const ALPHA_MODE_MASK            = (1 << Self::ALPHA_MODE_SHIFT_BITS);
+        const ALPHA_MODE_BLEND           = (2 << Self::ALPHA_MODE_SHIFT_BITS);
+        const ALPHA_MODE_PREMULTIPLIED   = (3 << Self::ALPHA_MODE_SHIFT_BITS);
+        const ALPHA_MODE_ADD             = (4 << Self::ALPHA_MODE_SHIFT_BITS);
+        const ALPHA_MODE_MULTIPLY        = (5 << Self::ALPHA_MODE_SHIFT_BITS);
+        const ALPHA_MODE_COVERAGE        = (6 << Self::ALPHA_MODE_SHIFT_BITS);
         const NONE                       = 0;
         const UNINITIALIZED              = 0xFFFF;
     }
@@ -280,7 +281,7 @@ impl MToonMaterialFlags {
 pub struct MToonMaterialUniform {
     pub flags: u32,
     pub base_color: Vec4,
-    pub shade_color: Color,
+    pub shade_color: Vec4,
     pub emissive: Vec4,
     pub alpha_cutoff: f32,
     pub shading_shift_factor: f32,
@@ -301,7 +302,7 @@ pub struct MToonMaterialUniform {
 }
 
 impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
-    fn as_bind_group_shader_type(&self, images: &RenderAssets<Image>) -> MToonMaterialUniform {
+    fn as_bind_group_shader_type(&self, images: &RenderAssets<GpuImage>) -> MToonMaterialUniform {
         let mut flags = MToonMaterialFlags::NONE;
 
         if self.base_color_texture.is_some() {
@@ -370,14 +371,15 @@ impl AsBindGroupShaderType<MToonMaterialUniform> for MToonMaterial {
             AlphaMode::Premultiplied => flags |= MToonMaterialFlags::ALPHA_MODE_PREMULTIPLIED,
             AlphaMode::Add => flags |= MToonMaterialFlags::ALPHA_MODE_ADD,
             AlphaMode::Multiply => flags |= MToonMaterialFlags::ALPHA_MODE_MULTIPLY,
+            AlphaMode::AlphaToCoverage => {}
         };
 
         MToonMaterialUniform {
             flags: flags.bits(),
-            base_color: self.base_color.into(),
-            emissive: self.emissive.into(),
+            base_color: self.base_color.to_vec4(),
+            emissive: self.emissive.to_vec4(),
             alpha_cutoff,
-            shade_color: self.shade_color,
+            shade_color: self.shade_color.to_vec4(),
             shading_shift_factor: self.shading_shift_factor,
             shading_shift_scale: self.shading_shift_scale,
             shading_toony_factor: self.shading_toony_factor,
